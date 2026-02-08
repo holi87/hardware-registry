@@ -60,6 +60,14 @@ Instrukcja użytkownika jest w osobnym pliku:
 
 - `docs/USAGE.md`
 
+Aktualny UI działa na podstronach menu:
+
+- Rooty i przestrzenie
+- Sieciowe (VLAN / Wi-Fi - osobno dodawanie i przegląd)
+- Urządzenia (osobno dodawanie i przegląd)
+- Topologia (PNG generowane na żądanie)
+- Użytkownicy (ADMIN)
+
 ## Backup / restore Postgres
 
 Backup:

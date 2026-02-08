@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+import uuid
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -23,6 +24,20 @@ class RootResponse(BaseModel):
     name: str
     notes: str | None
     created_at: datetime
+
+
+class CreateRootRequest(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    name: str = Field(min_length=1, max_length=255)
+    notes: str | None = None
+
+
+class UpdateRootRequest(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    name: str | None = Field(default=None, min_length=1, max_length=255)
+    notes: str | None = None
 
 
 class LocationSummary(BaseModel):
@@ -124,6 +139,10 @@ def _build_tree(locations: list[Location], root_id: UUID, device_counts: dict[UU
     return root_node
 
 
+def _to_root_response(root: Location) -> RootResponse:
+    return RootResponse(id=root.id, name=root.name, notes=root.notes, created_at=root.created_at)
+
+
 @router.get("/roots", response_model=list[RootResponse])
 def list_roots(current_user: User = Depends(require_user), db: Session = Depends(get_db)) -> list[RootResponse]:
     accessible_root_ids = get_accessible_root_ids(db, current_user)
@@ -131,10 +150,58 @@ def list_roots(current_user: User = Depends(require_user), db: Session = Depends
         return []
 
     roots = db.scalars(select(Location).where(Location.id.in_(accessible_root_ids))).all()
-    return [
-        RootResponse(id=root.id, name=root.name, notes=root.notes, created_at=root.created_at)
-        for root in sorted(roots, key=lambda item: item.name.lower())
-    ]
+    return [_to_root_response(root) for root in sorted(roots, key=lambda item: item.name.lower())]
+
+
+@router.post("/roots", response_model=RootResponse, status_code=status.HTTP_201_CREATED)
+def create_root(
+    payload: CreateRootRequest,
+    _: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> RootResponse:
+    root_id = uuid.uuid4()
+    root = Location(
+        id=root_id,
+        name=payload.name,
+        parent_id=None,
+        root_id=root_id,
+        notes=payload.notes,
+    )
+    db.add(root)
+    db.commit()
+    db.refresh(root)
+    return _to_root_response(root)
+
+
+@router.patch("/roots/{root_id}", response_model=RootResponse)
+def update_root(
+    root_id: UUID,
+    payload: UpdateRootRequest,
+    _: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> RootResponse:
+    root = ensure_root_exists(db, root_id)
+    if payload.name is not None:
+        root.name = payload.name
+    if "notes" in payload.model_fields_set:
+        root.notes = payload.notes
+
+    db.add(root)
+    db.commit()
+    db.refresh(root)
+    return _to_root_response(root)
+
+
+@router.delete("/roots/{root_id}")
+def delete_root(
+    root_id: UUID,
+    _: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> dict[str, str]:
+    root = ensure_root_exists(db, root_id)
+    db.delete(root)
+    db.commit()
+    return {"status": "ok"}
 
 
 @router.get("/locations/tree", response_model=LocationTreeNode)

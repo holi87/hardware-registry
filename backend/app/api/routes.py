@@ -9,6 +9,7 @@ from app.api.locations import router as locations_router
 from app.api.secrets import router as secrets_router
 from app.api.setup import router as setup_router
 from app.api.system import router as system_router
+from app.api.topology import router as topology_router
 from app.api.vlans import router as vlans_router
 from app.api.wifi import router as wifi_router
 
@@ -23,4 +24,5 @@ router.include_router(wifi_router)
 router.include_router(devices_router)
 router.include_router(connections_router)
 router.include_router(graph_router)
+router.include_router(topology_router)
 router.include_router(secrets_router)

@@ -20,5 +20,8 @@ class Vlan(Base):
     )
     vlan_id: Mapped[int] = mapped_column(Integer, nullable=False)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
+    subnet_mask: Mapped[str] = mapped_column(String(64), nullable=False)
+    ip_range_start: Mapped[str] = mapped_column(String(64), nullable=False)
+    ip_range_end: Mapped[str] = mapped_column(String(64), nullable=False)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[DateTime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())

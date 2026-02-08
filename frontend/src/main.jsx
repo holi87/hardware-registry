@@ -1,18 +1,10 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import cytoscape from "cytoscape";
 import "./styles.css";
 
 const apiBase = (import.meta.env.VITE_API_URL || "http://localhost:8381/api").replace(/\/$/, "");
 const ACCESS_KEY = "hardware_registry_access_token";
 const REFRESH_KEY = "hardware_registry_refresh_token";
-const RECEIVER_REQUIRED_TECHNOLOGIES = new Set(["ZIGBEE", "MATTER_OVER_THREAD", "BLUETOOTH", "BLE"]);
-const RECEIVER_CAPABILITY_BY_TECHNOLOGY = {
-  ZIGBEE: "supports_zigbee",
-  MATTER_OVER_THREAD: "supports_matter_thread",
-  BLUETOOTH: "supports_bluetooth",
-  BLE: "supports_ble",
-};
 
 function parseApiError(fallback, payload) {
   if (!payload) {
@@ -21,13 +13,36 @@ function parseApiError(fallback, payload) {
   if (typeof payload.detail === "string") {
     return payload.detail;
   }
+  if (Array.isArray(payload.detail) && payload.detail.length > 0) {
+    return payload.detail[0]?.msg || fallback;
+  }
+  if (Array.isArray(payload.errors) && payload.errors.length > 0) {
+    return payload.errors[0]?.msg || fallback;
+  }
   return fallback;
 }
 
 async function request(path, options = {}) {
   const response = await fetch(`${apiBase}${path}`, options);
-  const payload = await response.json().catch(() => null);
-  return { response, payload };
+  const contentType = response.headers.get("content-type") || "";
+  if (contentType.includes("application/json")) {
+    const payload = await response.json().catch(() => null);
+    return { response, payload };
+  }
+  return { response, payload: null };
+}
+
+async function requestBlob(path, options = {}) {
+  const response = await fetch(`${apiBase}${path}`, options);
+  const blob = await response.blob();
+  return { response, blob };
+}
+
+function authHeaders(accessToken, extra = {}) {
+  return {
+    Authorization: `Bearer ${accessToken}`,
+    ...extra,
+  };
 }
 
 function SetupAdminScreen({ onSetupDone }) {
@@ -191,10 +206,7 @@ function ChangePasswordScreen({ me, onChanged }) {
 
       const { response, payload } = await request("/auth/change-password", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${accessToken}`,
-        },
+        headers: authHeaders(accessToken, { "Content-Type": "application/json" }),
         body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
       });
 
@@ -259,44 +271,72 @@ function ChangePasswordScreen({ me, onChanged }) {
   );
 }
 
+function flattenTree(node) {
+  if (!node) {
+    return [];
+  }
+  const result = [];
+  const walk = (current, depth = 0) => {
+    result.push({ ...current, depth });
+    for (const child of current.children || []) {
+      walk(child, depth + 1);
+    }
+  };
+  walk(node, 0);
+  return result;
+}
+
+function MenuButton({ active, onClick, children }) {
+  return (
+    <button type="button" className={`menu-btn ${active ? "active" : ""}`} onClick={onClick}>
+      {children}
+    </button>
+  );
+}
+
 function ExplorerScreen({ me, accessToken, onLogout }) {
+  const [activePage, setActivePage] = useState("roots");
+
   const [roots, setRoots] = useState([]);
   const [selectedRootId, setSelectedRootId] = useState("");
-  const [tree, setTree] = useState(null);
-  const [currentLocationId, setCurrentLocationId] = useState("");
+  const [spaces, setSpaces] = useState([]);
+
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [vlans, setVlans] = useState([]);
-  const [vlansLoading, setVlansLoading] = useState(false);
-  const [vlansError, setVlansError] = useState("");
-  const [vlanSubmitting, setVlanSubmitting] = useState(false);
-  const [newVlan, setNewVlan] = useState({ vlanId: "", name: "", notes: "" });
-  const [wifiNetworks, setWifiNetworks] = useState([]);
-  const [wifiLoading, setWifiLoading] = useState(false);
-  const [wifiError, setWifiError] = useState("");
-  const [wifiFilterSpaceId, setWifiFilterSpaceId] = useState("all");
-  const [wifiSubmitting, setWifiSubmitting] = useState(false);
-  const [newWifi, setNewWifi] = useState({
+
+  const [toasts, setToasts] = useState([]);
+  const toastTimersRef = useRef(new Map());
+
+  const [rootForm, setRootForm] = useState({ name: "", notes: "" });
+  const [spaceForm, setSpaceForm] = useState({ name: "", parentId: "", notes: "" });
+
+  const [vlanList, setVlanList] = useState([]);
+  const [vlanForm, setVlanForm] = useState({
+    vlanId: "",
+    name: "",
+    subnetMask: "255.255.255.0",
+    ipRangeStart: "",
+    ipRangeEnd: "",
+    notes: "",
+  });
+
+  const [wifiList, setWifiList] = useState([]);
+  const [wifiForm, setWifiForm] = useState({
+    spaceId: "",
     ssid: "",
     password: "",
     security: "WPA2",
-    spaceId: "",
     vlanId: "",
     notes: "",
   });
-  const [revealedPasswords, setRevealedPasswords] = useState({});
-  const hideTimersRef = useRef(new Map());
-  const [devices, setDevices] = useState([]);
-  const [devicesLoading, setDevicesLoading] = useState(false);
-  const [devicesError, setDevicesError] = useState("");
-  const [selectedDeviceId, setSelectedDeviceId] = useState("");
-  const [deviceDetail, setDeviceDetail] = useState(null);
-  const [deviceDetailLoading, setDeviceDetailLoading] = useState(false);
-  const [deviceDetailError, setDeviceDetailError] = useState("");
-  const [showDeviceWizard, setShowDeviceWizard] = useState(false);
-  const [deviceWizardStep, setDeviceWizardStep] = useState(1);
-  const [deviceSubmitting, setDeviceSubmitting] = useState(false);
-  const [newDevice, setNewDevice] = useState({
+  const [wifiSpaceFilter, setWifiSpaceFilter] = useState("all");
+  const [revealedWifiPasswords, setRevealedWifiPasswords] = useState({});
+  const revealTimersRef = useRef(new Map());
+
+  const [deviceList, setDeviceList] = useState([]);
+  const [deviceSpaceFilter, setDeviceSpaceFilter] = useState("all");
+  const [deviceForm, setDeviceForm] = useState({
+    spaceId: "",
     name: "",
     type: "",
     vendor: "",
@@ -311,296 +351,51 @@ function ExplorerScreen({ me, accessToken, onLogout }) {
     supportsBluetooth: false,
     supportsBle: false,
   });
-  const [interfaceSubmitting, setInterfaceSubmitting] = useState(false);
-  const [newInterface, setNewInterface] = useState({ name: "", type: "", mac: "", notes: "" });
-  const [connections, setConnections] = useState([]);
-  const [connectionsLoading, setConnectionsLoading] = useState(false);
-  const [connectionsError, setConnectionsError] = useState("");
-  const [rootDevices, setRootDevices] = useState([]);
-  const [deviceInterfacesMap, setDeviceInterfacesMap] = useState({});
-  const [showConnectionWizard, setShowConnectionWizard] = useState(false);
-  const [connectionSubmitting, setConnectionSubmitting] = useState(false);
-  const [newConnection, setNewConnection] = useState({
-    fromDeviceId: "",
-    fromInterfaceId: "",
-    toDeviceId: "",
-    toInterfaceId: "",
-    receiverId: "",
-    technology: "ETHERNET",
-    vlanId: "",
-    notes: "",
+
+  const [users, setUsers] = useState([]);
+  const [userDrafts, setUserDrafts] = useState({});
+  const [passwordDrafts, setPasswordDrafts] = useState({});
+  const [userForm, setUserForm] = useState({
+    email: "",
+    password: "",
+    role: "USER",
+    isActive: true,
+    rootIds: [],
   });
-  const [graphData, setGraphData] = useState({ devices: [], connections: [] });
-  const [graphLoading, setGraphLoading] = useState(false);
-  const [graphError, setGraphError] = useState("");
-  const [graphTechnologyFilter, setGraphTechnologyFilter] = useState("all");
-  const [graphSpaceFilter, setGraphSpaceFilter] = useState("all");
-  const [graphTypeFilter, setGraphTypeFilter] = useState("all");
-  const [graphSearch, setGraphSearch] = useState("");
-  const graphContainerRef = useRef(null);
-  const graphInstanceRef = useRef(null);
-  const [secrets, setSecrets] = useState([]);
-  const [secretsLoading, setSecretsLoading] = useState(false);
-  const [secretsError, setSecretsError] = useState("");
-  const [secretSubmitting, setSecretSubmitting] = useState(false);
-  const [revealedSecrets, setRevealedSecrets] = useState({});
-  const [newSecret, setNewSecret] = useState({
-    type: "PASSWORD",
-    name: "",
-    value: "",
-    notes: "",
-  });
-  const [toasts, setToasts] = useState([]);
-  const toastTimersRef = useRef(new Map());
-  const [fabOpen, setFabOpen] = useState(false);
+
+  const [topologyUrl, setTopologyUrl] = useState("");
+  const [topologyLoading, setTopologyLoading] = useState(false);
 
   const isAdmin = me.role === "ADMIN";
 
-  const loadRoots = async () => {
-    const { response, payload } = await request("/roots", {
-      headers: { Authorization: `Bearer ${accessToken}` },
-    });
+  const selectedRoot = useMemo(() => roots.find((item) => item.id === selectedRootId) || null, [roots, selectedRootId]);
 
-    if (response.status === 401) {
-      localStorage.removeItem(ACCESS_KEY);
-      localStorage.removeItem(REFRESH_KEY);
-      onLogout();
-      return [];
-    }
+  const spaceOptions = useMemo(() => {
+    return spaces.map((space) => ({
+      ...space,
+      label: `${"\u00A0\u00A0".repeat(space.depth || 0)}${space.name}`,
+    }));
+  }, [spaces]);
 
-    if (!response.ok) {
-      throw new Error(parseApiError("Nie udało się pobrać rootów", payload));
+  const filteredWifi = useMemo(() => {
+    if (wifiSpaceFilter === "all") {
+      return wifiList;
     }
+    return wifiList.filter((item) => item.space_id === wifiSpaceFilter);
+  }, [wifiList, wifiSpaceFilter]);
 
-    return payload || [];
-  };
+  const filteredDevices = useMemo(() => {
+    if (deviceSpaceFilter === "all") {
+      return deviceList;
+    }
+    return deviceList.filter((item) => item.space_id === deviceSpaceFilter);
+  }, [deviceList, deviceSpaceFilter]);
 
-  const loadTree = async (rootId) => {
-    const { response, payload } = await request(`/locations/tree?root_id=${rootId}`, {
-      headers: { Authorization: `Bearer ${accessToken}` },
-    });
-
-    if (!response.ok) {
-      throw new Error(parseApiError("Nie udało się pobrać drzewa lokalizacji", payload));
-    }
-
-    return payload;
-  };
-
-  const loadVlans = async (rootId) => {
-    if (!rootId) {
-      setVlans([]);
-      return;
-    }
-
-    setVlansLoading(true);
-    setVlansError("");
-    try {
-      const { response, payload } = await request(`/vlans?root_id=${rootId}`, {
-        headers: { Authorization: `Bearer ${accessToken}` },
-      });
-      if (!response.ok) {
-        throw new Error(parseApiError("Nie udało się pobrać listy VLAN", payload));
-      }
-      setVlans(payload || []);
-    } catch (err) {
-      setVlans([]);
-      setVlansError(err.message || "Błąd pobierania VLAN");
-    } finally {
-      setVlansLoading(false);
-    }
-  };
-
-  const clearRevealedPasswords = () => {
-    for (const timeoutId of hideTimersRef.current.values()) {
-      clearTimeout(timeoutId);
-    }
-    hideTimersRef.current.clear();
-    setRevealedPasswords({});
-  };
-
-  const loadWifi = async (rootId) => {
-    if (!rootId) {
-      setWifiNetworks([]);
-      return;
-    }
-
-    setWifiLoading(true);
-    setWifiError("");
-    try {
-      const { response, payload } = await request(`/wifi?root_id=${rootId}`, {
-        headers: { Authorization: `Bearer ${accessToken}` },
-      });
-      if (!response.ok) {
-        throw new Error(parseApiError("Nie udało się pobrać listy Wi-Fi", payload));
-      }
-      setWifiNetworks(payload || []);
-    } catch (err) {
-      setWifiNetworks([]);
-      setWifiError(err.message || "Błąd pobierania Wi-Fi");
-    } finally {
-      setWifiLoading(false);
-    }
-  };
-
-  const loadDevices = async (rootId, spaceId) => {
-    if (!rootId || !spaceId) {
-      setDevices([]);
-      setSelectedDeviceId("");
-      return;
-    }
-
-    setDevicesLoading(true);
-    setDevicesError("");
-    try {
-      const { response, payload } = await request(`/devices?root_id=${rootId}&space_id=${spaceId}`, {
-        headers: { Authorization: `Bearer ${accessToken}` },
-      });
-      if (!response.ok) {
-        throw new Error(parseApiError("Nie udało się pobrać urządzeń", payload));
-      }
-      const list = payload || [];
-      setDevices(list);
-      setSelectedDeviceId((prev) => (prev && list.some((item) => item.id === prev) ? prev : list[0]?.id || ""));
-    } catch (err) {
-      setDevices([]);
-      setSelectedDeviceId("");
-      setDevicesError(err.message || "Błąd pobierania urządzeń");
-    } finally {
-      setDevicesLoading(false);
-    }
-  };
-
-  const loadDeviceDetail = async (deviceId) => {
-    if (!deviceId) {
-      setDeviceDetail(null);
-      setDeviceDetailError("");
-      return;
-    }
-
-    setDeviceDetailLoading(true);
-    setDeviceDetailError("");
-    try {
-      const { response, payload } = await request(`/devices/${deviceId}`, {
-        headers: { Authorization: `Bearer ${accessToken}` },
-      });
-      if (!response.ok) {
-        throw new Error(parseApiError("Nie udało się pobrać szczegółów urządzenia", payload));
-      }
-      setDeviceDetail(payload);
-      setDeviceInterfacesMap((prev) => ({ ...prev, [deviceId]: payload.interfaces || [] }));
-    } catch (err) {
-      setDeviceDetail(null);
-      setDeviceDetailError(err.message || "Błąd pobierania szczegółów");
-    } finally {
-      setDeviceDetailLoading(false);
-    }
-  };
-
-  const loadRootDevices = async (rootId) => {
-    if (!rootId) {
-      setRootDevices([]);
-      return;
-    }
-    try {
-      const { response, payload } = await request(`/devices?root_id=${rootId}`, {
-        headers: { Authorization: `Bearer ${accessToken}` },
-      });
-      if (!response.ok) {
-        throw new Error(parseApiError("Nie udało się pobrać urządzeń dla roota", payload));
-      }
-      setRootDevices(payload || []);
-    } catch (_) {
-      setRootDevices([]);
-    }
-  };
-
-  const ensureDeviceInterfaces = async (deviceId) => {
-    if (!deviceId || deviceInterfacesMap[deviceId]) {
-      return;
-    }
-    try {
-      const { response, payload } = await request(`/devices/${deviceId}`, {
-        headers: { Authorization: `Bearer ${accessToken}` },
-      });
-      if (!response.ok) {
-        return;
-      }
-      setDeviceInterfacesMap((prev) => ({ ...prev, [deviceId]: payload.interfaces || [] }));
-    } catch (_) {
-      // ignore lazy loading errors in wizard
-    }
-  };
-
-  const loadConnections = async (rootId, deviceId) => {
-    if (!rootId || !deviceId) {
-      setConnections([]);
-      return;
-    }
-    setConnectionsLoading(true);
-    setConnectionsError("");
-    try {
-      const { response, payload } = await request(`/connections?root_id=${rootId}&device_id=${deviceId}`, {
-        headers: { Authorization: `Bearer ${accessToken}` },
-      });
-      if (!response.ok) {
-        throw new Error(parseApiError("Nie udało się pobrać połączeń", payload));
-      }
-      setConnections(payload || []);
-    } catch (err) {
-      setConnections([]);
-      setConnectionsError(err.message || "Błąd pobierania połączeń");
-    } finally {
-      setConnectionsLoading(false);
-    }
-  };
-
-  const loadGraph = async (rootId) => {
-    if (!rootId) {
-      setGraphData({ devices: [], connections: [] });
-      return;
-    }
-    setGraphLoading(true);
-    setGraphError("");
-    try {
-      const { response, payload } = await request(`/graph?root_id=${rootId}`, {
-        headers: { Authorization: `Bearer ${accessToken}` },
-      });
-      if (!response.ok) {
-        throw new Error(parseApiError("Nie udało się pobrać grafu", payload));
-      }
-      setGraphData(payload || { devices: [], connections: [] });
-    } catch (err) {
-      setGraphData({ devices: [], connections: [] });
-      setGraphError(err.message || "Błąd pobierania grafu");
-    } finally {
-      setGraphLoading(false);
-    }
-  };
-
-  const loadSecrets = async (rootId) => {
-    if (!rootId || !isAdmin) {
-      setSecrets([]);
-      return;
-    }
-
-    setSecretsLoading(true);
-    setSecretsError("");
-    try {
-      const { response, payload } = await request(`/secrets?root_id=${rootId}`, {
-        headers: { Authorization: `Bearer ${accessToken}` },
-      });
-      if (!response.ok) {
-        throw new Error(parseApiError("Nie udało się pobrać sekretów", payload));
-      }
-      setSecrets(payload || []);
-    } catch (err) {
-      setSecrets([]);
-      setSecretsError(err.message || "Błąd pobierania sekretów");
-    } finally {
-      setSecretsLoading(false);
-    }
-  };
+  const rootNameById = useMemo(() => {
+    const map = new Map();
+    roots.forEach((root) => map.set(root.id, root.name));
+    return map;
+  }, [roots]);
 
   const pushToast = (message, type = "success") => {
     const id = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
@@ -620,78 +415,163 @@ function ExplorerScreen({ me, accessToken, onLogout }) {
     setToasts([]);
   };
 
-  useEffect(() => {
-    let mounted = true;
+  const clearRevealedWifi = () => {
+    for (const timerId of revealTimersRef.current.values()) {
+      clearTimeout(timerId);
+    }
+    revealTimersRef.current.clear();
+    setRevealedWifiPasswords({});
+  };
 
-    const bootstrap = async () => {
-      setLoading(true);
-      setError("");
-      try {
-        const rootsData = await loadRoots();
-        if (!mounted) {
-          return;
-        }
-        setRoots(rootsData);
-
-        if (rootsData.length === 0) {
-          setTree(null);
-          setSelectedRootId("");
-          setCurrentLocationId("");
-          return;
-        }
-
-        const firstRootId = selectedRootId && rootsData.some((r) => r.id === selectedRootId) ? selectedRootId : rootsData[0].id;
-        setSelectedRootId(firstRootId);
-        const treeData = await loadTree(firstRootId);
-        if (!mounted) {
-          return;
-        }
-        setTree(treeData);
-        setCurrentLocationId(firstRootId);
-      } catch (err) {
-        if (mounted) {
-          setError(err.message || "Błąd ładowania danych");
-        }
-      } finally {
-        if (mounted) {
-          setLoading(false);
-        }
+  const loadRoots = async () => {
+    const { response, payload } = await request("/roots", {
+      headers: authHeaders(accessToken),
+    });
+    if (!response.ok) {
+      throw new Error(parseApiError("Nie udało się pobrać rootów", payload));
+    }
+    const list = payload || [];
+    setRoots(list);
+    setSelectedRootId((prev) => {
+      if (prev && list.some((item) => item.id === prev)) {
+        return prev;
       }
-    };
+      return list[0]?.id || "";
+    });
+    return list;
+  };
 
-    bootstrap();
-
-    return () => {
-      mounted = false;
-    };
-  }, [accessToken]);
-
-  useEffect(() => {
-    if (!selectedRootId) {
-      return;
+  const loadSpaces = async (rootId) => {
+    if (!rootId) {
+      setSpaces([]);
+      return [];
     }
 
-    let mounted = true;
-    setError("");
-    setLoading(true);
+    const { response, payload } = await request(`/locations/tree?root_id=${rootId}`, {
+      headers: authHeaders(accessToken),
+    });
 
-    loadTree(selectedRootId)
-      .then((treeData) => {
+    if (!response.ok) {
+      throw new Error(parseApiError("Nie udało się pobrać przestrzeni", payload));
+    }
+
+    const flattened = flattenTree(payload);
+    setSpaces(flattened);
+
+    setSpaceForm((prev) => ({
+      ...prev,
+      parentId: prev.parentId && flattened.some((space) => space.id === prev.parentId) ? prev.parentId : rootId,
+    }));
+    setWifiForm((prev) => ({
+      ...prev,
+      spaceId: prev.spaceId && flattened.some((space) => space.id === prev.spaceId) ? prev.spaceId : rootId,
+    }));
+    setDeviceForm((prev) => ({
+      ...prev,
+      spaceId: prev.spaceId && flattened.some((space) => space.id === prev.spaceId) ? prev.spaceId : rootId,
+    }));
+
+    return flattened;
+  };
+
+  const loadVlans = async (rootId) => {
+    if (!rootId) {
+      setVlanList([]);
+      return;
+    }
+    const { response, payload } = await request(`/vlans?root_id=${rootId}`, {
+      headers: authHeaders(accessToken),
+    });
+    if (!response.ok) {
+      throw new Error(parseApiError("Nie udało się pobrać VLAN", payload));
+    }
+    setVlanList(payload || []);
+    setWifiForm((prev) => ({
+      ...prev,
+      vlanId: prev.vlanId && (payload || []).some((vlan) => vlan.id === prev.vlanId) ? prev.vlanId : "",
+    }));
+  };
+
+  const loadWifi = async (rootId) => {
+    if (!rootId) {
+      setWifiList([]);
+      return;
+    }
+    const { response, payload } = await request(`/wifi?root_id=${rootId}`, {
+      headers: authHeaders(accessToken),
+    });
+    if (!response.ok) {
+      throw new Error(parseApiError("Nie udało się pobrać Wi-Fi", payload));
+    }
+    setWifiList(payload || []);
+  };
+
+  const loadDevices = async (rootId) => {
+    if (!rootId) {
+      setDeviceList([]);
+      return;
+    }
+    const { response, payload } = await request(`/devices?root_id=${rootId}`, {
+      headers: authHeaders(accessToken),
+    });
+    if (!response.ok) {
+      throw new Error(parseApiError("Nie udało się pobrać urządzeń", payload));
+    }
+    setDeviceList(payload || []);
+  };
+
+  const loadUsers = async () => {
+    if (!isAdmin) {
+      setUsers([]);
+      setUserDrafts({});
+      return;
+    }
+    const { response, payload } = await request("/admin/users", {
+      headers: authHeaders(accessToken),
+    });
+    if (!response.ok) {
+      throw new Error(parseApiError("Nie udało się pobrać użytkowników", payload));
+    }
+    const list = payload || [];
+    setUsers(list);
+    const drafts = {};
+    list.forEach((user) => {
+      drafts[user.id] = {
+        email: user.email,
+        role: user.role,
+        is_active: user.is_active,
+        root_ids: user.root_ids || [],
+      };
+    });
+    setUserDrafts(drafts);
+  };
+
+  const refreshAllForRoot = async (rootId) => {
+    if (!rootId) {
+      return;
+    }
+    await Promise.all([loadSpaces(rootId), loadVlans(rootId), loadWifi(rootId), loadDevices(rootId)]);
+  };
+
+  useEffect(() => {
+    let mounted = true;
+    setLoading(true);
+    setError("");
+
+    loadRoots()
+      .then(async (list) => {
         if (!mounted) {
           return;
         }
-        setTree(treeData);
-        setCurrentLocationId((prev) => {
-          if (!prev) {
-            return selectedRootId;
-          }
-          return prev;
-        });
+        const firstRoot = list[0]?.id || "";
+        if (firstRoot) {
+          await refreshAllForRoot(firstRoot);
+        }
+        await loadUsers();
       })
       .catch((err) => {
         if (mounted) {
-          setError(err.message || "Błąd ładowania drzewa");
-          setTree(null);
+          setError(err.message || "Błąd ładowania danych");
         }
       })
       .finally(() => {
@@ -702,748 +582,1235 @@ function ExplorerScreen({ me, accessToken, onLogout }) {
 
     return () => {
       mounted = false;
+      clearRevealedWifi();
+      clearToasts();
+      if (topologyUrl) {
+        URL.revokeObjectURL(topologyUrl);
+      }
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [accessToken]);
+
+  useEffect(() => {
+    if (!selectedRootId) {
+      return;
+    }
+    setError("");
+    refreshAllForRoot(selectedRootId).catch((err) => setError(err.message || "Błąd odświeżania danych"));
+    if (topologyUrl) {
+      URL.revokeObjectURL(topologyUrl);
+      setTopologyUrl("");
+    }
+    clearRevealedWifi();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedRootId]);
 
   useEffect(() => {
-    loadVlans(selectedRootId);
-  }, [selectedRootId, accessToken]);
-
-  useEffect(() => {
-    clearRevealedPasswords();
-    setWifiFilterSpaceId("all");
-    setNewWifi((prev) => ({ ...prev, spaceId: "", vlanId: "" }));
-    loadWifi(selectedRootId);
-  }, [selectedRootId, accessToken]);
+    loadUsers().catch((err) => setError(err.message || "Błąd ładowania użytkowników"));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAdmin]);
 
   useEffect(() => {
     const onVisibilityChange = () => {
       if (document.hidden) {
-        clearRevealedPasswords();
+        clearRevealedWifi();
       }
     };
     document.addEventListener("visibilitychange", onVisibilityChange);
-    return () => {
-      document.removeEventListener("visibilitychange", onVisibilityChange);
-      clearRevealedPasswords();
-      clearToasts();
-    };
+    return () => document.removeEventListener("visibilitychange", onVisibilityChange);
   }, []);
 
-  useEffect(() => {
-    loadDevices(selectedRootId, currentLocationId);
-    setShowDeviceWizard(false);
-    setDeviceWizardStep(1);
-    setShowConnectionWizard(false);
-  }, [selectedRootId, currentLocationId, accessToken]);
-
-  useEffect(() => {
-    loadDeviceDetail(selectedDeviceId);
-  }, [selectedDeviceId, accessToken]);
-
-  useEffect(() => {
-    setDeviceInterfacesMap({});
-    loadRootDevices(selectedRootId);
-    loadGraph(selectedRootId);
-    loadSecrets(selectedRootId);
-    setRevealedSecrets({});
-    setNewSecret({ type: "PASSWORD", name: "", value: "", notes: "" });
-    setGraphTechnologyFilter("all");
-    setGraphSpaceFilter("all");
-    setGraphTypeFilter("all");
-    setGraphSearch("");
-    setNewConnection({
-      fromDeviceId: "",
-      fromInterfaceId: "",
-      toDeviceId: "",
-      toInterfaceId: "",
-      receiverId: "",
-      technology: "ETHERNET",
-      vlanId: "",
-      notes: "",
-    });
-  }, [selectedRootId, accessToken]);
-
-  useEffect(() => {
-    loadConnections(selectedRootId, selectedDeviceId);
-  }, [selectedRootId, selectedDeviceId, accessToken]);
-
-  useEffect(() => {
-    if (!newConnection.fromDeviceId) {
-      return;
-    }
-    ensureDeviceInterfaces(newConnection.fromDeviceId);
-  }, [newConnection.fromDeviceId, accessToken]);
-
-  useEffect(() => {
-    if (!newConnection.toDeviceId) {
-      return;
-    }
-    ensureDeviceInterfaces(newConnection.toDeviceId);
-  }, [newConnection.toDeviceId, accessToken]);
-
-  useEffect(
-    () => () => {
-      if (graphInstanceRef.current) {
-        graphInstanceRef.current.destroy();
-        graphInstanceRef.current = null;
-      }
-    },
-    [],
-  );
-
-  const maps = useMemo(() => {
-    const byId = new Map();
-    const parentById = new Map();
-
-    const walk = (node, parentId = null) => {
-      if (!node) {
-        return;
-      }
-      byId.set(node.id, node);
-      parentById.set(node.id, parentId);
-      for (const child of node.children || []) {
-        walk(child, node.id);
-      }
-    };
-
-    walk(tree);
-    return { byId, parentById };
-  }, [tree]);
-
-  useEffect(() => {
-    if (!tree) {
-      return;
-    }
-    if (!maps.byId.has(currentLocationId)) {
-      setCurrentLocationId(tree.id);
-    }
-  }, [tree, currentLocationId, maps]);
-
-  const currentNode = maps.byId.get(currentLocationId) || tree;
-  const children = currentNode?.children || [];
-
-  const breadcrumb = useMemo(() => {
-    if (!currentNode) {
-      return [];
-    }
-    const list = [];
-    let pointer = currentNode.id;
-
-    while (pointer) {
-      const node = maps.byId.get(pointer);
-      if (!node) {
-        break;
-      }
-      list.push(node);
-      pointer = maps.parentById.get(pointer) || null;
-    }
-
-    return list.reverse();
-  }, [currentNode, maps]);
-
-  const spaces = useMemo(() => {
-    const items = [];
-    for (const node of maps.byId.values()) {
-      if (selectedRootId && node.root_id !== selectedRootId) {
-        continue;
-      }
-      items.push(node);
-    }
-    return items.sort((a, b) => a.name.localeCompare(b.name, "pl"));
-  }, [maps, selectedRootId]);
-
-  const filteredWifiNetworks = useMemo(() => {
-    if (wifiFilterSpaceId === "all") {
-      return wifiNetworks;
-    }
-    return wifiNetworks.filter((network) => network.space_id === wifiFilterSpaceId);
-  }, [wifiNetworks, wifiFilterSpaceId]);
-
-  const fromInterfaces = deviceInterfacesMap[newConnection.fromDeviceId] || [];
-  const toInterfaces = deviceInterfacesMap[newConnection.toDeviceId] || [];
-  const requiredReceiverCapability = RECEIVER_CAPABILITY_BY_TECHNOLOGY[newConnection.technology];
-  const receiverRequiredForTechnology = RECEIVER_REQUIRED_TECHNOLOGIES.has(newConnection.technology);
-  const receiverCandidates = useMemo(() => {
-    return rootDevices.filter((device) => {
-      if (!device.is_receiver) {
-        return false;
-      }
-      if (!requiredReceiverCapability) {
-        return true;
-      }
-      return Boolean(device[requiredReceiverCapability]);
-    });
-  }, [rootDevices, requiredReceiverCapability]);
-
-  useEffect(() => {
-    if (!newConnection.receiverId) {
-      return;
-    }
-    if (receiverCandidates.some((device) => device.id === newConnection.receiverId)) {
-      return;
-    }
-    setNewConnection((prev) => ({ ...prev, receiverId: "" }));
-  }, [newConnection.receiverId, receiverCandidates]);
-
-  const deviceNameById = useMemo(() => {
-    const map = new Map();
-    for (const device of rootDevices) {
-      map.set(device.id, device.name);
-    }
-    return map;
-  }, [rootDevices]);
-
-  const interfaceNameById = useMemo(() => {
-    const map = new Map();
-    Object.values(deviceInterfacesMap).forEach((interfaces) => {
-      (interfaces || []).forEach((item) => map.set(item.id, item.name));
-    });
-    if (deviceDetail?.interfaces) {
-      deviceDetail.interfaces.forEach((item) => map.set(item.id, item.name));
-    }
-    return map;
-  }, [deviceInterfacesMap, deviceDetail]);
-
-  const graphTechnologyOptions = useMemo(() => {
-    const values = new Set(graphData.connections.map((edge) => edge.technology));
-    return Array.from(values).sort();
-  }, [graphData]);
-
-  const graphTypeOptions = useMemo(() => {
-    const values = new Set(graphData.devices.map((node) => node.type));
-    return Array.from(values).sort((a, b) => a.localeCompare(b, "pl"));
-  }, [graphData]);
-
-  const filteredGraph = useMemo(() => {
-    const devicesFiltered = graphData.devices.filter((node) => {
-      if (graphSpaceFilter !== "all" && node.space_id !== graphSpaceFilter) {
-        return false;
-      }
-      if (graphTypeFilter !== "all" && node.type !== graphTypeFilter) {
-        return false;
-      }
-      return true;
-    });
-
-    const deviceIds = new Set(devicesFiltered.map((node) => node.id));
-    const connectionsFiltered = graphData.connections.filter((edge) => {
-      if (graphTechnologyFilter !== "all" && edge.technology !== graphTechnologyFilter) {
-        return false;
-      }
-      return deviceIds.has(edge.from_device_id) && deviceIds.has(edge.to_device_id);
-    });
-
-    return { devices: devicesFiltered, connections: connectionsFiltered };
-  }, [graphData, graphSpaceFilter, graphTechnologyFilter, graphTypeFilter]);
-
-  const graphElements = useMemo(() => {
-    const nodes = filteredGraph.devices.map((node) => ({
-      data: {
-        id: node.id,
-        label: node.name,
-        type: node.type,
-        spaceId: node.space_id,
-      },
-    }));
-    const edges = filteredGraph.connections.map((edge) => ({
-      data: {
-        id: edge.id,
-        source: edge.from_device_id,
-        target: edge.to_device_id,
-        label: edge.technology,
-      },
-    }));
-    return [...nodes, ...edges];
-  }, [filteredGraph]);
-
-  const deviceSecrets = useMemo(() => {
-    if (!selectedDeviceId) {
-      return [];
-    }
-    return secrets.filter((item) => item.linked_device_id === selectedDeviceId);
-  }, [secrets, selectedDeviceId]);
-
-  useEffect(() => {
-    if (!graphContainerRef.current) {
-      return;
-    }
-
-    if (graphInstanceRef.current) {
-      graphInstanceRef.current.destroy();
-      graphInstanceRef.current = null;
-    }
-
-    graphInstanceRef.current = cytoscape({
-      container: graphContainerRef.current,
-      elements: graphElements,
-      style: [
-        {
-          selector: "node",
-          style: {
-            label: "data(label)",
-            "background-color": "#0f172a",
-            color: "#f8fafc",
-            "font-size": "11px",
-            "text-valign": "center",
-            "text-halign": "center",
-            padding: "8px",
-            shape: "roundrectangle",
-            width: "label",
-            height: "label",
-          },
-        },
-        {
-          selector: "edge",
-          style: {
-            width: 2,
-            "line-color": "#64748b",
-            "target-arrow-color": "#64748b",
-            "target-arrow-shape": "triangle",
-            "curve-style": "bezier",
-            label: "data(label)",
-            "font-size": "9px",
-            color: "#334155",
-          },
-        },
-        {
-          selector: ".highlighted",
-          style: {
-            "background-color": "#0ea5e9",
-            "line-color": "#0ea5e9",
-            "target-arrow-color": "#0ea5e9",
-          },
-        },
-      ],
-      layout: {
-        name: "cose",
-        fit: true,
-        animate: false,
-      },
-    });
-  }, [graphElements]);
-
-  useEffect(() => {
-    if (!selectedRootId || spaces.length === 0) {
-      return;
-    }
-    setNewWifi((prev) => {
-      if (prev.spaceId && spaces.some((space) => space.id === prev.spaceId)) {
-        return prev;
-      }
-      const fallbackId = spaces.find((space) => space.id === currentLocationId)?.id || spaces[0].id;
-      return { ...prev, spaceId: fallbackId };
-    });
-  }, [selectedRootId, spaces, currentLocationId]);
-
   const onRootChange = (event) => {
-    const rootId = event.target.value;
-    setSelectedRootId(rootId);
-    setCurrentLocationId(rootId);
+    setSelectedRootId(event.target.value);
+  };
+
+  const onCreateRoot = async (event) => {
+    event.preventDefault();
+    if (!isAdmin) {
+      return;
+    }
+    setError("");
+    try {
+      const { response, payload } = await request("/roots", {
+        method: "POST",
+        headers: authHeaders(accessToken, { "Content-Type": "application/json" }),
+        body: JSON.stringify({
+          name: rootForm.name,
+          notes: rootForm.notes || null,
+        }),
+      });
+      if (!response.ok) {
+        throw new Error(parseApiError("Nie udało się utworzyć roota", payload));
+      }
+      setRootForm({ name: "", notes: "" });
+      await loadRoots();
+      await loadUsers();
+      pushToast("Root został utworzony");
+    } catch (err) {
+      setError(err.message || "Błąd tworzenia roota");
+    }
+  };
+
+  const onDeleteRoot = async (rootId) => {
+    if (!isAdmin) {
+      return;
+    }
+    const confirmed = window.confirm("Usunąć ten root i wszystkie jego dane?");
+    if (!confirmed) {
+      return;
+    }
+
+    setError("");
+    try {
+      const { response, payload } = await request(`/roots/${rootId}`, {
+        method: "DELETE",
+        headers: authHeaders(accessToken),
+      });
+      if (!response.ok && response.status !== 204) {
+        throw new Error(parseApiError("Nie udało się usunąć roota", payload));
+      }
+
+      await loadRoots();
+      await loadUsers();
+      pushToast("Root został usunięty");
+    } catch (err) {
+      setError(err.message || "Błąd usuwania roota");
+    }
+  };
+
+  const onCreateSpace = async (event) => {
+    event.preventDefault();
+    if (!isAdmin || !selectedRootId) {
+      return;
+    }
+    setError("");
+    try {
+      const { response, payload } = await request("/locations", {
+        method: "POST",
+        headers: authHeaders(accessToken, { "Content-Type": "application/json" }),
+        body: JSON.stringify({
+          name: spaceForm.name,
+          root_id: selectedRootId,
+          parent_id: spaceForm.parentId || selectedRootId,
+          notes: spaceForm.notes || null,
+        }),
+      });
+      if (!response.ok) {
+        throw new Error(parseApiError("Nie udało się utworzyć przestrzeni", payload));
+      }
+      setSpaceForm((prev) => ({ ...prev, name: "", notes: "" }));
+      await loadSpaces(selectedRootId);
+      pushToast("Przestrzeń została utworzona");
+    } catch (err) {
+      setError(err.message || "Błąd tworzenia przestrzeni");
+    }
   };
 
   const onCreateVlan = async (event) => {
     event.preventDefault();
-    if (!selectedRootId) {
+    if (!isAdmin || !selectedRootId) {
       return;
     }
 
-    const parsedVlan = Number(newVlan.vlanId);
-    if (!Number.isInteger(parsedVlan) || parsedVlan < 1 || parsedVlan > 4094) {
-      setVlansError("VLAN ID musi być liczbą z zakresu 1-4094");
+    const vlanId = Number(vlanForm.vlanId);
+    if (!Number.isInteger(vlanId) || vlanId < 1 || vlanId > 4094) {
+      setError("VLAN ID musi być liczbą 1-4094");
       return;
     }
 
-    setVlanSubmitting(true);
-    setVlansError("");
+    setError("");
     try {
       const { response, payload } = await request("/vlans", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${accessToken}`,
-        },
+        headers: authHeaders(accessToken, { "Content-Type": "application/json" }),
         body: JSON.stringify({
           root_id: selectedRootId,
-          vlan_id: parsedVlan,
-          name: newVlan.name,
-          notes: newVlan.notes || null,
+          vlan_id: vlanId,
+          name: vlanForm.name,
+          subnet_mask: vlanForm.subnetMask,
+          ip_range_start: vlanForm.ipRangeStart,
+          ip_range_end: vlanForm.ipRangeEnd,
+          notes: vlanForm.notes || null,
         }),
       });
-
       if (!response.ok) {
-        throw new Error(parseApiError("Nie udało się utworzyć VLAN", payload));
+        throw new Error(parseApiError("Nie udało się zapisać VLAN", payload));
       }
 
-      setNewVlan({ vlanId: "", name: "", notes: "" });
+      setVlanForm({
+        vlanId: "",
+        name: "",
+        subnetMask: "255.255.255.0",
+        ipRangeStart: "",
+        ipRangeEnd: "",
+        notes: "",
+      });
       await loadVlans(selectedRootId);
-      pushToast("VLAN został utworzony");
+      pushToast("VLAN zapisany poprawnie");
     } catch (err) {
-      setVlansError(err.message || "Błąd tworzenia VLAN");
-    } finally {
-      setVlanSubmitting(false);
+      setError(err.message || "Błąd zapisu VLAN");
     }
   };
 
   const onCreateWifi = async (event) => {
     event.preventDefault();
-    if (!selectedRootId) {
+    if (!isAdmin || !selectedRootId) {
       return;
     }
-    if (!newWifi.spaceId) {
-      setWifiError("Wybierz przestrzeń dla sieci Wi-Fi");
-      return;
-    }
-    if (!newWifi.vlanId) {
-      setWifiError("Wybierz VLAN dla sieci Wi-Fi");
+    if (!wifiForm.spaceId || !wifiForm.vlanId) {
+      setError("Wi-Fi wymaga przestrzeni i VLAN");
       return;
     }
 
-    setWifiSubmitting(true);
-    setWifiError("");
+    setError("");
     try {
       const { response, payload } = await request("/wifi", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${accessToken}`,
-        },
+        headers: authHeaders(accessToken, { "Content-Type": "application/json" }),
         body: JSON.stringify({
           root_id: selectedRootId,
-          space_id: newWifi.spaceId,
-          ssid: newWifi.ssid,
-          password: newWifi.password,
-          security: newWifi.security,
-          vlan_id: newWifi.vlanId,
-          notes: newWifi.notes || null,
+          space_id: wifiForm.spaceId,
+          ssid: wifiForm.ssid,
+          password: wifiForm.password,
+          security: wifiForm.security,
+          vlan_id: wifiForm.vlanId,
+          notes: wifiForm.notes || null,
         }),
       });
-
       if (!response.ok) {
-        throw new Error(parseApiError("Nie udało się dodać sieci Wi-Fi", payload));
+        throw new Error(parseApiError("Nie udało się zapisać Wi-Fi", payload));
       }
 
-      setNewWifi((prev) => ({
-        ...prev,
-        ssid: "",
-        password: "",
-        notes: "",
-        vlanId: "",
-      }));
+      setWifiForm((prev) => ({ ...prev, ssid: "", password: "", notes: "" }));
       await loadWifi(selectedRootId);
-      pushToast("Sieć Wi-Fi została dodana");
+      pushToast("Wi-Fi zapisane poprawnie");
     } catch (err) {
-      setWifiError(err.message || "Błąd tworzenia Wi-Fi");
-    } finally {
-      setWifiSubmitting(false);
+      setError(err.message || "Błąd zapisu Wi-Fi");
     }
   };
 
   const onRevealWifi = async (wifiId) => {
-    setWifiError("");
+    setError("");
     try {
       const { response, payload } = await request(`/wifi/${wifiId}/reveal`, {
         method: "POST",
-        headers: { Authorization: `Bearer ${accessToken}` },
+        headers: authHeaders(accessToken),
       });
       if (!response.ok) {
         throw new Error(parseApiError("Nie udało się odsłonić hasła", payload));
       }
 
-      if (hideTimersRef.current.has(wifiId)) {
-        clearTimeout(hideTimersRef.current.get(wifiId));
+      if (revealTimersRef.current.has(wifiId)) {
+        clearTimeout(revealTimersRef.current.get(wifiId));
       }
 
-      setRevealedPasswords((prev) => ({ ...prev, [wifiId]: payload.password }));
+      setRevealedWifiPasswords((prev) => ({ ...prev, [wifiId]: payload.password }));
       const timeoutId = setTimeout(() => {
-        setRevealedPasswords((prev) => {
+        setRevealedWifiPasswords((prev) => {
           const copy = { ...prev };
           delete copy[wifiId];
           return copy;
         });
-        hideTimersRef.current.delete(wifiId);
+        revealTimersRef.current.delete(wifiId);
       }, 30_000);
-      hideTimersRef.current.set(wifiId, timeoutId);
-      pushToast("Hasło Wi-Fi odsłonięte na 30 sekund");
+      revealTimersRef.current.set(wifiId, timeoutId);
+      pushToast("Hasło odsłonięte na 30 sekund");
     } catch (err) {
-      setWifiError(err.message || "Błąd odsłaniania hasła");
-    }
-  };
-
-  const onCopyPassword = async (wifiId) => {
-    const value = revealedPasswords[wifiId];
-    if (!value) {
-      return;
-    }
-    try {
-      await navigator.clipboard.writeText(value);
-      pushToast("Hasło skopiowane do schowka");
-    } catch (_) {
-      setWifiError("Nie udało się skopiować hasła");
+      setError(err.message || "Błąd reveal hasła Wi-Fi");
     }
   };
 
   const onCreateDevice = async (event) => {
     event.preventDefault();
-    if (!selectedRootId || !currentLocationId) {
+    if (!isAdmin || !selectedRootId) {
+      return;
+    }
+    if (!deviceForm.spaceId) {
+      setError("Wybierz przestrzeń dla urządzenia");
       return;
     }
 
-    setDeviceSubmitting(true);
-    setDevicesError("");
+    setError("");
     try {
       const { response, payload } = await request("/devices", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${accessToken}`,
-        },
+        headers: authHeaders(accessToken, { "Content-Type": "application/json" }),
         body: JSON.stringify({
           root_id: selectedRootId,
-          space_id: currentLocationId,
-          name: newDevice.name,
-          type: newDevice.type,
-          vendor: newDevice.vendor || null,
-          model: newDevice.model || null,
-          serial: newDevice.serial || null,
-          notes: newDevice.notes || null,
-          is_receiver: newDevice.isReceiver,
-          supports_wifi: newDevice.supportsWifi,
-          supports_ethernet: newDevice.supportsEthernet,
-          supports_zigbee: newDevice.supportsZigbee,
-          supports_matter_thread: newDevice.supportsMatterThread,
-          supports_bluetooth: newDevice.supportsBluetooth,
-          supports_ble: newDevice.supportsBle,
+          space_id: deviceForm.spaceId,
+          name: deviceForm.name,
+          type: deviceForm.type,
+          vendor: deviceForm.vendor || null,
+          model: deviceForm.model || null,
+          serial: deviceForm.serial || null,
+          notes: deviceForm.notes || null,
+          is_receiver: deviceForm.isReceiver,
+          supports_wifi: deviceForm.supportsWifi,
+          supports_ethernet: deviceForm.supportsEthernet,
+          supports_zigbee: deviceForm.supportsZigbee,
+          supports_matter_thread: deviceForm.supportsMatterThread,
+          supports_bluetooth: deviceForm.supportsBluetooth,
+          supports_ble: deviceForm.supportsBle,
         }),
       });
       if (!response.ok) {
-        throw new Error(parseApiError("Nie udało się dodać urządzenia", payload));
+        throw new Error(parseApiError("Nie udało się zapisać urządzenia", payload));
       }
 
-      setShowDeviceWizard(false);
-      setDeviceWizardStep(1);
-      setNewDevice({
+      setDeviceForm((prev) => ({
+        ...prev,
         name: "",
         type: "",
         vendor: "",
         model: "",
         serial: "",
         notes: "",
-        isReceiver: false,
-        supportsWifi: false,
-        supportsEthernet: false,
-        supportsZigbee: false,
-        supportsMatterThread: false,
-        supportsBluetooth: false,
-        supportsBle: false,
-      });
-      await loadDevices(selectedRootId, currentLocationId);
-      if (payload?.id) {
-        setSelectedDeviceId(payload.id);
-      }
-      const treeData = await loadTree(selectedRootId);
-      setTree(treeData);
-      pushToast("Urządzenie zostało dodane");
+      }));
+      await loadDevices(selectedRootId);
+      pushToast("Urządzenie zapisane poprawnie");
     } catch (err) {
-      setDevicesError(err.message || "Błąd dodawania urządzenia");
-    } finally {
-      setDeviceSubmitting(false);
+      setError(err.message || "Błąd zapisu urządzenia");
     }
   };
 
-  const onCreateInterface = async (event) => {
-    event.preventDefault();
-    if (!selectedDeviceId) {
-      return;
-    }
-
-    setInterfaceSubmitting(true);
-    setDeviceDetailError("");
-    try {
-      const { response, payload } = await request(`/devices/${selectedDeviceId}/interfaces`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${accessToken}`,
-        },
-        body: JSON.stringify({
-          name: newInterface.name,
-          type: newInterface.type,
-          mac: newInterface.mac || null,
-          notes: newInterface.notes || null,
-        }),
-      });
-      if (!response.ok) {
-        throw new Error(parseApiError("Nie udało się dodać interfejsu", payload));
-      }
-
-      setNewInterface({ name: "", type: "", mac: "", notes: "" });
-      await loadDeviceDetail(selectedDeviceId);
-      pushToast("Interfejs został dodany");
-    } catch (err) {
-      setDeviceDetailError(err.message || "Błąd dodawania interfejsu");
-    } finally {
-      setInterfaceSubmitting(false);
-    }
-  };
-
-  const onCreateConnection = async (event) => {
-    event.preventDefault();
+  const onGenerateTopology = async () => {
     if (!selectedRootId) {
       return;
     }
-
-    const requiresReceiver = RECEIVER_REQUIRED_TECHNOLOGIES.has(newConnection.technology);
-
-    if (!newConnection.fromInterfaceId || !newConnection.toInterfaceId) {
-      setConnectionsError("Wybierz oba interfejsy połączenia");
-      return;
-    }
-    if (requiresReceiver && !newConnection.receiverId) {
-      setConnectionsError("Dla wybranej technologii wymagany jest odbiornik/koordynator");
-      return;
-    }
-
-    setConnectionSubmitting(true);
-    setConnectionsError("");
+    setTopologyLoading(true);
+    setError("");
     try {
-      const payload = {
-        root_id: selectedRootId,
-        from_interface_id: newConnection.fromInterfaceId,
-        to_interface_id: newConnection.toInterfaceId,
-        receiver_id: requiresReceiver ? newConnection.receiverId : null,
-        technology: newConnection.technology,
-        vlan_id: newConnection.technology === "ETHERNET" ? newConnection.vlanId || null : null,
-        notes: newConnection.notes || null,
-      };
-
-      const { response, payload: responsePayload } = await request("/connections", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${accessToken}`,
-        },
-        body: JSON.stringify(payload),
+      const { response, blob } = await requestBlob(`/topology/png?root_id=${selectedRootId}`, {
+        headers: authHeaders(accessToken),
       });
       if (!response.ok) {
-        throw new Error(parseApiError("Nie udało się utworzyć połączenia", responsePayload));
+        const text = await blob.text().catch(() => "");
+        throw new Error(text || "Nie udało się wygenerować PNG topologii");
       }
 
-      setShowConnectionWizard(false);
-      setNewConnection({
-        fromDeviceId: "",
-        fromInterfaceId: "",
-        toDeviceId: "",
-        toInterfaceId: "",
-        receiverId: "",
-        technology: "ETHERNET",
-        vlanId: "",
-        notes: "",
-      });
-      await loadConnections(selectedRootId, selectedDeviceId);
-      pushToast("Połączenie zostało utworzone");
+      if (topologyUrl) {
+        URL.revokeObjectURL(topologyUrl);
+      }
+      const url = URL.createObjectURL(blob);
+      setTopologyUrl(url);
+      pushToast("Wygenerowano PNG topologii");
     } catch (err) {
-      setConnectionsError(err.message || "Błąd tworzenia połączenia");
+      setError(err.message || "Błąd generowania topologii");
     } finally {
-      setConnectionSubmitting(false);
+      setTopologyLoading(false);
     }
   };
 
-  const onGraphSearch = () => {
-    const cy = graphInstanceRef.current;
-    const term = graphSearch.trim().toLowerCase();
-    if (!cy || !term) {
-      return;
-    }
-
-    const matches = cy.nodes().filter((node) => node.data("label").toLowerCase().includes(term));
-    if (matches.length === 0) {
-      return;
-    }
-
-    const target = matches[0];
-    cy.elements().removeClass("highlighted");
-    target.addClass("highlighted");
-    cy.animate({
-      fit: {
-        eles: target,
-        padding: 80,
-      },
-      duration: 250,
-    });
-  };
-
-  const onCreateSecret = async (event) => {
+  const onCreateUser = async (event) => {
     event.preventDefault();
-    if (!selectedRootId || !isAdmin) {
+    if (!isAdmin) {
       return;
     }
 
-    setSecretSubmitting(true);
-    setSecretsError("");
+    const rootIds = userForm.role === "USER" ? userForm.rootIds : userForm.rootIds;
+    if (userForm.role === "USER" && rootIds.length === 0) {
+      setError("USER musi mieć przypisany co najmniej jeden root");
+      return;
+    }
+
+    setError("");
     try {
-      const { response, payload } = await request("/secrets", {
+      const { response, payload } = await request("/admin/users", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${accessToken}`,
-        },
+        headers: authHeaders(accessToken, { "Content-Type": "application/json" }),
         body: JSON.stringify({
-          root_id: selectedRootId,
-          type: newSecret.type,
-          name: newSecret.name,
-          value: newSecret.value,
-          linked_device_id: selectedDeviceId || null,
-          notes: newSecret.notes || null,
+          email: userForm.email,
+          password: userForm.password,
+          role: userForm.role,
+          is_active: userForm.isActive,
+          root_ids: rootIds,
         }),
       });
       if (!response.ok) {
-        throw new Error(parseApiError("Nie udało się dodać sekretu", payload));
+        throw new Error(parseApiError("Nie udało się utworzyć użytkownika", payload));
       }
-      setNewSecret({ type: "PASSWORD", name: "", value: "", notes: "" });
-      await loadSecrets(selectedRootId);
-      pushToast("Sekret został zapisany");
+
+      setUserForm({ email: "", password: "", role: "USER", isActive: true, rootIds: [] });
+      await loadUsers();
+      pushToast("Użytkownik został utworzony");
     } catch (err) {
-      setSecretsError(err.message || "Błąd dodawania sekretu");
-    } finally {
-      setSecretSubmitting(false);
+      setError(err.message || "Błąd tworzenia użytkownika");
     }
   };
 
-  const onRevealSecret = async (secretId) => {
-    setSecretsError("");
+  const onSaveUser = async (userId) => {
+    if (!isAdmin) {
+      return;
+    }
+    const draft = userDrafts[userId];
+    if (!draft) {
+      return;
+    }
+    if (draft.role === "USER" && (!draft.root_ids || draft.root_ids.length === 0)) {
+      setError("USER musi mieć przypisany co najmniej jeden root");
+      return;
+    }
+
+    setError("");
     try {
-      const { response, payload } = await request(`/secrets/${secretId}/reveal`, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${accessToken}` },
+      const { response, payload } = await request(`/admin/users/${userId}`, {
+        method: "PATCH",
+        headers: authHeaders(accessToken, { "Content-Type": "application/json" }),
+        body: JSON.stringify(draft),
       });
       if (!response.ok) {
-        throw new Error(parseApiError("Nie udało się odsłonić sekretu", payload));
+        throw new Error(parseApiError("Nie udało się zapisać użytkownika", payload));
       }
-      setRevealedSecrets((prev) => ({ ...prev, [secretId]: payload.value }));
-      pushToast("Sekret został odsłonięty");
+      await loadUsers();
+      pushToast("Zmiany użytkownika zapisane");
     } catch (err) {
-      setSecretsError(err.message || "Błąd reveal sekretu");
+      setError(err.message || "Błąd zapisu użytkownika");
+    }
+  };
+
+  const onSetUserPassword = async (userId) => {
+    if (!isAdmin) {
+      return;
+    }
+    const password = passwordDrafts[userId] || "";
+    if (!password) {
+      setError("Podaj nowe hasło");
+      return;
+    }
+
+    setError("");
+    try {
+      const { response, payload } = await request(`/admin/users/${userId}/set-password`, {
+        method: "POST",
+        headers: authHeaders(accessToken, { "Content-Type": "application/json" }),
+        body: JSON.stringify({ password, must_change_password: true }),
+      });
+      if (!response.ok) {
+        throw new Error(parseApiError("Nie udało się ustawić hasła", payload));
+      }
+      setPasswordDrafts((prev) => ({ ...prev, [userId]: "" }));
+      await loadUsers();
+      pushToast("Hasło użytkownika zostało zmienione");
+    } catch (err) {
+      setError(err.message || "Błąd ustawiania hasła");
+    }
+  };
+
+  const renderRootsPage = () => (
+    <section className="subpanel page-panel">
+      <h3>Rooty i przestrzenie</h3>
+      <p className="muted">Zarządzanie root lokalizacjami oraz podprzestrzeniami (tylko ADMIN).</p>
+
+      <div className="table-wrap">
+        <table className="data-table">
+          <thead>
+            <tr>
+              <th>Root</th>
+              <th>Notatki</th>
+              <th>Akcje</th>
+            </tr>
+          </thead>
+          <tbody>
+            {roots.length === 0 ? (
+              <tr>
+                <td colSpan={3}>Brak rootów</td>
+              </tr>
+            ) : (
+              roots.map((root) => (
+                <tr key={root.id}>
+                  <td>
+                    <button
+                      type="button"
+                      className={`link-btn ${selectedRootId === root.id ? "active" : ""}`}
+                      onClick={() => setSelectedRootId(root.id)}
+                    >
+                      {root.name}
+                    </button>
+                  </td>
+                  <td>{root.notes || "-"}</td>
+                  <td>
+                    {isAdmin ? (
+                      <button type="button" className="button-secondary" onClick={() => onDeleteRoot(root.id)}>
+                        Usuń root
+                      </button>
+                    ) : (
+                      "-"
+                    )}
+                  </td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      {isAdmin ? (
+        <>
+          <form className="inline-form" onSubmit={onCreateRoot}>
+            <h4>Dodaj root</h4>
+            <label htmlFor="root-name">Nazwa</label>
+            <input
+              id="root-name"
+              value={rootForm.name}
+              onChange={(event) => setRootForm((prev) => ({ ...prev, name: event.target.value }))}
+              required
+            />
+            <label htmlFor="root-notes">Notatki</label>
+            <input
+              id="root-notes"
+              value={rootForm.notes}
+              onChange={(event) => setRootForm((prev) => ({ ...prev, notes: event.target.value }))}
+            />
+            <button type="submit">Dodaj root</button>
+          </form>
+
+          {selectedRootId ? (
+            <form className="inline-form" onSubmit={onCreateSpace}>
+              <h4>Dodaj przestrzeń (root: {selectedRoot?.name || selectedRootId})</h4>
+              <label htmlFor="space-name">Nazwa</label>
+              <input
+                id="space-name"
+                value={spaceForm.name}
+                onChange={(event) => setSpaceForm((prev) => ({ ...prev, name: event.target.value }))}
+                required
+              />
+              <label htmlFor="space-parent">Parent</label>
+              <select
+                id="space-parent"
+                value={spaceForm.parentId || selectedRootId}
+                onChange={(event) => setSpaceForm((prev) => ({ ...prev, parentId: event.target.value }))}
+              >
+                {spaceOptions.map((space) => (
+                  <option key={space.id} value={space.id}>
+                    {space.label}
+                  </option>
+                ))}
+              </select>
+              <label htmlFor="space-notes">Notatki</label>
+              <input
+                id="space-notes"
+                value={spaceForm.notes}
+                onChange={(event) => setSpaceForm((prev) => ({ ...prev, notes: event.target.value }))}
+              />
+              <button type="submit">Dodaj przestrzeń</button>
+            </form>
+          ) : null}
+        </>
+      ) : null}
+    </section>
+  );
+
+  const renderVlanListPage = () => (
+    <section className="subpanel page-panel">
+      <h3>VLAN - przegląd</h3>
+      <div className="table-wrap">
+        <table className="data-table">
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>Nazwa</th>
+              <th>Maska</th>
+              <th>Range start</th>
+              <th>Range end</th>
+              <th>Notatki</th>
+            </tr>
+          </thead>
+          <tbody>
+            {vlanList.length === 0 ? (
+              <tr>
+                <td colSpan={6}>Brak VLAN</td>
+              </tr>
+            ) : (
+              vlanList.map((vlan) => (
+                <tr key={vlan.id}>
+                  <td>{vlan.vlan_id}</td>
+                  <td>{vlan.name}</td>
+                  <td>{vlan.subnet_mask}</td>
+                  <td>{vlan.ip_range_start}</td>
+                  <td>{vlan.ip_range_end}</td>
+                  <td>{vlan.notes || "-"}</td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+
+  const renderVlanAddPage = () => (
+    <section className="subpanel page-panel">
+      <h3>VLAN - dodawanie</h3>
+      {!isAdmin ? <p>Brak uprawnień (ADMIN)</p> : null}
+      {isAdmin ? (
+        <form className="inline-form" onSubmit={onCreateVlan}>
+          <label htmlFor="vlan-id">VLAN ID</label>
+          <input
+            id="vlan-id"
+            inputMode="numeric"
+            value={vlanForm.vlanId}
+            onChange={(event) => setVlanForm((prev) => ({ ...prev, vlanId: event.target.value }))}
+            required
+          />
+
+          <label htmlFor="vlan-name">Nazwa</label>
+          <input
+            id="vlan-name"
+            value={vlanForm.name}
+            onChange={(event) => setVlanForm((prev) => ({ ...prev, name: event.target.value }))}
+            required
+          />
+
+          <label htmlFor="vlan-mask">Maska</label>
+          <input
+            id="vlan-mask"
+            value={vlanForm.subnetMask}
+            onChange={(event) => setVlanForm((prev) => ({ ...prev, subnetMask: event.target.value }))}
+            required
+          />
+
+          <label htmlFor="vlan-range-start">Zakres IP start</label>
+          <input
+            id="vlan-range-start"
+            value={vlanForm.ipRangeStart}
+            onChange={(event) => setVlanForm((prev) => ({ ...prev, ipRangeStart: event.target.value }))}
+            required
+          />
+
+          <label htmlFor="vlan-range-end">Zakres IP end</label>
+          <input
+            id="vlan-range-end"
+            value={vlanForm.ipRangeEnd}
+            onChange={(event) => setVlanForm((prev) => ({ ...prev, ipRangeEnd: event.target.value }))}
+            required
+          />
+
+          <label htmlFor="vlan-notes">Notatki</label>
+          <input
+            id="vlan-notes"
+            value={vlanForm.notes}
+            onChange={(event) => setVlanForm((prev) => ({ ...prev, notes: event.target.value }))}
+          />
+
+          <button type="submit">Zapisz VLAN</button>
+        </form>
+      ) : null}
+    </section>
+  );
+
+  const renderWifiListPage = () => (
+    <section className="subpanel page-panel">
+      <h3>Wi-Fi - przegląd</h3>
+      <div className="field">
+        <label htmlFor="wifi-space-filter">Filtruj po przestrzeni</label>
+        <select
+          id="wifi-space-filter"
+          value={wifiSpaceFilter}
+          onChange={(event) => setWifiSpaceFilter(event.target.value)}
+        >
+          <option value="all">Wszystkie</option>
+          {spaceOptions.map((space) => (
+            <option key={space.id} value={space.id}>
+              {space.label}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      <div className="table-wrap">
+        <table className="data-table">
+          <thead>
+            <tr>
+              <th>SSID</th>
+              <th>Security</th>
+              <th>Przestrzeń</th>
+              <th>VLAN</th>
+              <th>Hasło</th>
+              <th>Akcje</th>
+            </tr>
+          </thead>
+          <tbody>
+            {filteredWifi.length === 0 ? (
+              <tr>
+                <td colSpan={6}>Brak Wi-Fi</td>
+              </tr>
+            ) : (
+              filteredWifi.map((wifi) => {
+                const space = spaces.find((item) => item.id === wifi.space_id);
+                const vlan = vlanList.find((item) => item.id === wifi.vlan_id);
+                return (
+                  <tr key={wifi.id}>
+                    <td>{wifi.ssid}</td>
+                    <td>{wifi.security}</td>
+                    <td>{space?.name || wifi.space_id}</td>
+                    <td>{vlan ? `VLAN ${vlan.vlan_id}` : wifi.vlan_id}</td>
+                    <td className="mono-cell">{revealedWifiPasswords[wifi.id] || "••••••••••••"}</td>
+                    <td>
+                      <button type="button" onClick={() => onRevealWifi(wifi.id)}>
+                        Pokaż
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })
+            )}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+
+  const renderWifiAddPage = () => (
+    <section className="subpanel page-panel">
+      <h3>Wi-Fi - dodawanie</h3>
+      {!isAdmin ? <p>Brak uprawnień (ADMIN)</p> : null}
+      {isAdmin ? (
+        <form className="inline-form" onSubmit={onCreateWifi}>
+          <label htmlFor="wifi-ssid">SSID</label>
+          <input
+            id="wifi-ssid"
+            value={wifiForm.ssid}
+            onChange={(event) => setWifiForm((prev) => ({ ...prev, ssid: event.target.value }))}
+            required
+          />
+
+          <label htmlFor="wifi-password">Hasło</label>
+          <input
+            id="wifi-password"
+            type="password"
+            value={wifiForm.password}
+            onChange={(event) => setWifiForm((prev) => ({ ...prev, password: event.target.value }))}
+            required
+          />
+
+          <label htmlFor="wifi-security">Security</label>
+          <input
+            id="wifi-security"
+            value={wifiForm.security}
+            onChange={(event) => setWifiForm((prev) => ({ ...prev, security: event.target.value }))}
+            required
+          />
+
+          <label htmlFor="wifi-space">Przestrzeń</label>
+          <select
+            id="wifi-space"
+            value={wifiForm.spaceId}
+            onChange={(event) => setWifiForm((prev) => ({ ...prev, spaceId: event.target.value }))}
+            required
+          >
+            <option value="">Wybierz</option>
+            {spaceOptions.map((space) => (
+              <option key={space.id} value={space.id}>
+                {space.label}
+              </option>
+            ))}
+          </select>
+
+          <label htmlFor="wifi-vlan">VLAN</label>
+          <select
+            id="wifi-vlan"
+            value={wifiForm.vlanId}
+            onChange={(event) => setWifiForm((prev) => ({ ...prev, vlanId: event.target.value }))}
+            required
+          >
+            <option value="">Wybierz VLAN</option>
+            {vlanList.map((vlan) => (
+              <option key={vlan.id} value={vlan.id}>
+                VLAN {vlan.vlan_id} - {vlan.name}
+              </option>
+            ))}
+          </select>
+
+          <label htmlFor="wifi-notes">Notatki</label>
+          <input
+            id="wifi-notes"
+            value={wifiForm.notes}
+            onChange={(event) => setWifiForm((prev) => ({ ...prev, notes: event.target.value }))}
+          />
+
+          <button type="submit">Zapisz Wi-Fi</button>
+        </form>
+      ) : null}
+    </section>
+  );
+
+  const renderDevicesListPage = () => (
+    <section className="subpanel page-panel">
+      <h3>Urządzenia - przegląd</h3>
+      <div className="field">
+        <label htmlFor="device-space-filter">Filtruj po przestrzeni</label>
+        <select
+          id="device-space-filter"
+          value={deviceSpaceFilter}
+          onChange={(event) => setDeviceSpaceFilter(event.target.value)}
+        >
+          <option value="all">Wszystkie</option>
+          {spaceOptions.map((space) => (
+            <option key={space.id} value={space.id}>
+              {space.label}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      <div className="table-wrap">
+        <table className="data-table">
+          <thead>
+            <tr>
+              <th>Nazwa</th>
+              <th>Typ</th>
+              <th>Vendor</th>
+              <th>Model</th>
+              <th>Przestrzeń</th>
+              <th>Odbiornik</th>
+            </tr>
+          </thead>
+          <tbody>
+            {filteredDevices.length === 0 ? (
+              <tr>
+                <td colSpan={6}>Brak urządzeń</td>
+              </tr>
+            ) : (
+              filteredDevices.map((device) => {
+                const space = spaces.find((item) => item.id === device.space_id);
+                const capabilities = [];
+                if (device.supports_zigbee) capabilities.push("Zigbee");
+                if (device.supports_matter_thread) capabilities.push("MatterThread");
+                if (device.supports_bluetooth) capabilities.push("Bluetooth");
+                if (device.supports_ble) capabilities.push("BLE");
+                return (
+                  <tr key={device.id}>
+                    <td>{device.name}</td>
+                    <td>{device.type}</td>
+                    <td>{device.vendor || "-"}</td>
+                    <td>{device.model || "-"}</td>
+                    <td>{space?.name || device.space_id}</td>
+                    <td>{device.is_receiver ? capabilities.join(", ") || "tak" : "nie"}</td>
+                  </tr>
+                );
+              })
+            )}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+
+  const renderDeviceAddPage = () => (
+    <section className="subpanel page-panel">
+      <h3>Urządzenia - dodawanie</h3>
+      {!isAdmin ? <p>Brak uprawnień (ADMIN)</p> : null}
+      {isAdmin ? (
+        <form className="inline-form" onSubmit={onCreateDevice}>
+          <label htmlFor="device-name">Nazwa</label>
+          <input
+            id="device-name"
+            value={deviceForm.name}
+            onChange={(event) => setDeviceForm((prev) => ({ ...prev, name: event.target.value }))}
+            required
+          />
+
+          <label htmlFor="device-type">Typ</label>
+          <input
+            id="device-type"
+            value={deviceForm.type}
+            onChange={(event) => setDeviceForm((prev) => ({ ...prev, type: event.target.value }))}
+            required
+          />
+
+          <label htmlFor="device-space">Przestrzeń</label>
+          <select
+            id="device-space"
+            value={deviceForm.spaceId}
+            onChange={(event) => setDeviceForm((prev) => ({ ...prev, spaceId: event.target.value }))}
+            required
+          >
+            <option value="">Wybierz</option>
+            {spaceOptions.map((space) => (
+              <option key={space.id} value={space.id}>
+                {space.label}
+              </option>
+            ))}
+          </select>
+
+          <label htmlFor="device-vendor">Vendor</label>
+          <input
+            id="device-vendor"
+            value={deviceForm.vendor}
+            onChange={(event) => setDeviceForm((prev) => ({ ...prev, vendor: event.target.value }))}
+          />
+
+          <label htmlFor="device-model">Model</label>
+          <input
+            id="device-model"
+            value={deviceForm.model}
+            onChange={(event) => setDeviceForm((prev) => ({ ...prev, model: event.target.value }))}
+          />
+
+          <label htmlFor="device-serial">Serial</label>
+          <input
+            id="device-serial"
+            value={deviceForm.serial}
+            onChange={(event) => setDeviceForm((prev) => ({ ...prev, serial: event.target.value }))}
+          />
+
+          <label htmlFor="device-notes">Notatki</label>
+          <input
+            id="device-notes"
+            value={deviceForm.notes}
+            onChange={(event) => setDeviceForm((prev) => ({ ...prev, notes: event.target.value }))}
+          />
+
+          <label htmlFor="is-receiver" className="checkbox-row">
+            <input
+              id="is-receiver"
+              type="checkbox"
+              checked={deviceForm.isReceiver}
+              onChange={(event) =>
+                setDeviceForm((prev) => ({
+                  ...prev,
+                  isReceiver: event.target.checked,
+                  supportsWifi: event.target.checked ? prev.supportsWifi : false,
+                  supportsEthernet: event.target.checked ? prev.supportsEthernet : false,
+                  supportsZigbee: event.target.checked ? prev.supportsZigbee : false,
+                  supportsMatterThread: event.target.checked ? prev.supportsMatterThread : false,
+                  supportsBluetooth: event.target.checked ? prev.supportsBluetooth : false,
+                  supportsBle: event.target.checked ? prev.supportsBle : false,
+                }))
+              }
+            />
+            Odbiornik / koordynator
+          </label>
+
+          <div className="checkbox-grid">
+            <label className="checkbox-row">
+              <input
+                type="checkbox"
+                checked={deviceForm.supportsWifi}
+                disabled={!deviceForm.isReceiver}
+                onChange={(event) => setDeviceForm((prev) => ({ ...prev, supportsWifi: event.target.checked }))}
+              />
+              Wi-Fi
+            </label>
+            <label className="checkbox-row">
+              <input
+                type="checkbox"
+                checked={deviceForm.supportsEthernet}
+                disabled={!deviceForm.isReceiver}
+                onChange={(event) => setDeviceForm((prev) => ({ ...prev, supportsEthernet: event.target.checked }))}
+              />
+              Ethernet
+            </label>
+            <label className="checkbox-row">
+              <input
+                type="checkbox"
+                checked={deviceForm.supportsZigbee}
+                disabled={!deviceForm.isReceiver}
+                onChange={(event) => setDeviceForm((prev) => ({ ...prev, supportsZigbee: event.target.checked }))}
+              />
+              Zigbee
+            </label>
+            <label className="checkbox-row">
+              <input
+                type="checkbox"
+                checked={deviceForm.supportsMatterThread}
+                disabled={!deviceForm.isReceiver}
+                onChange={(event) => setDeviceForm((prev) => ({ ...prev, supportsMatterThread: event.target.checked }))}
+              />
+              Matter Thread
+            </label>
+            <label className="checkbox-row">
+              <input
+                type="checkbox"
+                checked={deviceForm.supportsBluetooth}
+                disabled={!deviceForm.isReceiver}
+                onChange={(event) => setDeviceForm((prev) => ({ ...prev, supportsBluetooth: event.target.checked }))}
+              />
+              Bluetooth
+            </label>
+            <label className="checkbox-row">
+              <input
+                type="checkbox"
+                checked={deviceForm.supportsBle}
+                disabled={!deviceForm.isReceiver}
+                onChange={(event) => setDeviceForm((prev) => ({ ...prev, supportsBle: event.target.checked }))}
+              />
+              BLE
+            </label>
+          </div>
+
+          <button type="submit">Zapisz urządzenie</button>
+        </form>
+      ) : null}
+    </section>
+  );
+
+  const renderUsersListPage = () => (
+    <section className="subpanel page-panel">
+      <h3>Użytkownicy - przegląd i przypisania rootów</h3>
+      {!isAdmin ? <p>Brak uprawnień (ADMIN)</p> : null}
+      {isAdmin ? (
+        <div className="table-wrap">
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>Email</th>
+                <th>Rola</th>
+                <th>Aktywny</th>
+                <th>Rooty</th>
+                <th>Hasło</th>
+                <th>Akcje</th>
+              </tr>
+            </thead>
+            <tbody>
+              {users.length === 0 ? (
+                <tr>
+                  <td colSpan={6}>Brak użytkowników</td>
+                </tr>
+              ) : (
+                users.map((user) => {
+                  const draft = userDrafts[user.id] || {
+                    email: user.email,
+                    role: user.role,
+                    is_active: user.is_active,
+                    root_ids: user.root_ids || [],
+                  };
+                  return (
+                    <tr key={user.id}>
+                      <td>
+                        <input
+                          value={draft.email || ""}
+                          onChange={(event) =>
+                            setUserDrafts((prev) => ({
+                              ...prev,
+                              [user.id]: { ...draft, email: event.target.value },
+                            }))
+                          }
+                        />
+                      </td>
+                      <td>
+                        <select
+                          value={draft.role || "USER"}
+                          onChange={(event) =>
+                            setUserDrafts((prev) => ({
+                              ...prev,
+                              [user.id]: { ...draft, role: event.target.value },
+                            }))
+                          }
+                        >
+                          <option value="USER">USER</option>
+                          <option value="ADMIN">ADMIN</option>
+                        </select>
+                      </td>
+                      <td>
+                        <label className="checkbox-row compact">
+                          <input
+                            type="checkbox"
+                            checked={Boolean(draft.is_active)}
+                            onChange={(event) =>
+                              setUserDrafts((prev) => ({
+                                ...prev,
+                                [user.id]: { ...draft, is_active: event.target.checked },
+                              }))
+                            }
+                          />
+                          tak
+                        </label>
+                      </td>
+                      <td>
+                        <div className="checklist">
+                          {roots.map((root) => (
+                            <label key={`${user.id}-${root.id}`} className="checkbox-row compact">
+                              <input
+                                type="checkbox"
+                                checked={(draft.root_ids || []).includes(root.id)}
+                                onChange={(event) => {
+                                  const next = new Set(draft.root_ids || []);
+                                  if (event.target.checked) {
+                                    next.add(root.id);
+                                  } else {
+                                    next.delete(root.id);
+                                  }
+                                  setUserDrafts((prev) => ({
+                                    ...prev,
+                                    [user.id]: { ...draft, root_ids: Array.from(next) },
+                                  }));
+                                }}
+                              />
+                              {root.name}
+                            </label>
+                          ))}
+                        </div>
+                      </td>
+                      <td>
+                        <div className="password-cell">
+                          <input
+                            type="password"
+                            value={passwordDrafts[user.id] || ""}
+                            onChange={(event) =>
+                              setPasswordDrafts((prev) => ({
+                                ...prev,
+                                [user.id]: event.target.value,
+                              }))
+                            }
+                            placeholder="Nowe hasło"
+                          />
+                          <button type="button" className="button-secondary" onClick={() => onSetUserPassword(user.id)}>
+                            Ustaw hasło
+                          </button>
+                        </div>
+                      </td>
+                      <td>
+                        <button type="button" onClick={() => onSaveUser(user.id)}>
+                          Zapisz
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })
+              )}
+            </tbody>
+          </table>
+        </div>
+      ) : null}
+    </section>
+  );
+
+  const renderUserAddPage = () => (
+    <section className="subpanel page-panel">
+      <h3>Użytkownicy - dodawanie</h3>
+      {!isAdmin ? <p>Brak uprawnień (ADMIN)</p> : null}
+      {isAdmin ? (
+        <form className="inline-form" onSubmit={onCreateUser}>
+          <label htmlFor="new-user-email">Email</label>
+          <input
+            id="new-user-email"
+            type="email"
+            value={userForm.email}
+            onChange={(event) => setUserForm((prev) => ({ ...prev, email: event.target.value }))}
+            required
+          />
+
+          <label htmlFor="new-user-password">Hasło</label>
+          <input
+            id="new-user-password"
+            type="password"
+            value={userForm.password}
+            onChange={(event) => setUserForm((prev) => ({ ...prev, password: event.target.value }))}
+            required
+          />
+
+          <label htmlFor="new-user-role">Rola</label>
+          <select
+            id="new-user-role"
+            value={userForm.role}
+            onChange={(event) => setUserForm((prev) => ({ ...prev, role: event.target.value }))}
+          >
+            <option value="USER">USER</option>
+            <option value="ADMIN">ADMIN</option>
+          </select>
+
+          <label className="checkbox-row">
+            <input
+              type="checkbox"
+              checked={userForm.isActive}
+              onChange={(event) => setUserForm((prev) => ({ ...prev, isActive: event.target.checked }))}
+            />
+            Konto aktywne
+          </label>
+
+          <div>
+            <strong>Przypisane rooty</strong>
+            <div className="checklist">
+              {roots.map((root) => (
+                <label key={`new-user-root-${root.id}`} className="checkbox-row compact">
+                  <input
+                    type="checkbox"
+                    checked={userForm.rootIds.includes(root.id)}
+                    onChange={(event) => {
+                      const next = new Set(userForm.rootIds);
+                      if (event.target.checked) {
+                        next.add(root.id);
+                      } else {
+                        next.delete(root.id);
+                      }
+                      setUserForm((prev) => ({ ...prev, rootIds: Array.from(next) }));
+                    }}
+                  />
+                  {root.name}
+                </label>
+              ))}
+            </div>
+          </div>
+
+          <button type="submit">Utwórz użytkownika</button>
+        </form>
+      ) : null}
+    </section>
+  );
+
+  const renderTopologyPage = () => (
+    <section className="subpanel page-panel">
+      <h3>Topologia - generowanie PNG</h3>
+      <p className="muted">Graf interaktywny został zastąpiony statycznym PNG generowanym na żądanie.</p>
+      <button type="button" onClick={onGenerateTopology} disabled={!selectedRootId || topologyLoading}>
+        {topologyLoading ? "Generowanie..." : "Generuj PNG"}
+      </button>
+      {topologyUrl ? (
+        <div className="topology-preview">
+          <img src={topologyUrl} alt="Topology PNG" />
+          <a href={topologyUrl} download={`topology-${selectedRootId}.png`}>
+            Pobierz PNG
+          </a>
+        </div>
+      ) : null}
+    </section>
+  );
+
+  const renderPage = () => {
+    switch (activePage) {
+      case "roots":
+        return renderRootsPage();
+      case "network-vlan-list":
+        return renderVlanListPage();
+      case "network-vlan-add":
+        return renderVlanAddPage();
+      case "network-wifi-list":
+        return renderWifiListPage();
+      case "network-wifi-add":
+        return renderWifiAddPage();
+      case "devices-list":
+        return renderDevicesListPage();
+      case "devices-add":
+        return renderDeviceAddPage();
+      case "users-list":
+        return renderUsersListPage();
+      case "users-add":
+        return renderUserAddPage();
+      case "topology":
+        return renderTopologyPage();
+      default:
+        return renderRootsPage();
     }
   };
 
   return (
-    <section className="panel">
-      <div className="panel-header">
-        <div>
-          <h2>Eksplorator przestrzeni</h2>
-          <p className="muted">
-            {me.email} ({me.role})
-          </p>
+    <>
+      <section className="panel">
+        <div className="panel-header">
+          <div>
+            <h2>Hardware Registry</h2>
+            <p className="muted">
+              {me.email} ({me.role})
+            </p>
+          </div>
+          <button type="button" className="button-secondary" onClick={onLogout}>
+            Wyloguj
+          </button>
         </div>
-        <button type="button" className="button-secondary" onClick={onLogout}>
-          Wyloguj
-        </button>
-      </div>
 
-      {roots.length > 1 ? (
         <div className="field">
-          <label htmlFor="root-selector">Root</label>
+          <label htmlFor="root-selector">Aktywny root</label>
           <select id="root-selector" value={selectedRootId} onChange={onRootChange}>
             {roots.map((root) => (
               <option key={root.id} value={root.id}>
@@ -1452,848 +1819,71 @@ function ExplorerScreen({ me, accessToken, onLogout }) {
             ))}
           </select>
         </div>
-      ) : null}
 
-      {loading ? <p>Ładowanie przestrzeni...</p> : null}
-      {error ? <p className="error">{error}</p> : null}
-      {!loading && !error && roots.length === 0 ? <p>Brak przypisanych rootów.</p> : null}
+        <div className="console-layout">
+          <aside className="menu-panel">
+            <h3>Menu</h3>
 
-      {!loading && !error && currentNode ? (
-        <>
-          <nav className="breadcrumb" aria-label="breadcrumb">
-            {breadcrumb.map((node, index) => (
-              <button
-                key={node.id}
-                type="button"
-                className={`crumb ${node.id === currentNode.id ? "is-active" : ""}`}
-                onClick={() => setCurrentLocationId(node.id)}
-                disabled={node.id === currentNode.id}
-              >
-                {node.name}
-                {index < breadcrumb.length - 1 ? " /" : ""}
-              </button>
-            ))}
-          </nav>
+            <p className="menu-group-title">Rooty</p>
+            <MenuButton active={activePage === "roots"} onClick={() => setActivePage("roots")}>Rooty i przestrzenie</MenuButton>
 
-          <header className="space-header">
-            <h3>{currentNode.name}</h3>
-            {currentNode.notes ? <p className="muted">{currentNode.notes}</p> : null}
-          </header>
+            <p className="menu-group-title">Sieciowe</p>
+            <MenuButton
+              active={activePage === "network-vlan-list"}
+              onClick={() => setActivePage("network-vlan-list")}
+            >
+              VLAN - przegląd
+            </MenuButton>
+            <MenuButton
+              active={activePage === "network-vlan-add"}
+              onClick={() => setActivePage("network-vlan-add")}
+            >
+              VLAN - dodawanie
+            </MenuButton>
+            <MenuButton
+              active={activePage === "network-wifi-list"}
+              onClick={() => setActivePage("network-wifi-list")}
+            >
+              Wi-Fi - przegląd
+            </MenuButton>
+            <MenuButton
+              active={activePage === "network-wifi-add"}
+              onClick={() => setActivePage("network-wifi-add")}
+            >
+              Wi-Fi - dodawanie
+            </MenuButton>
 
-          <div className="tile-grid">
-            {children.length === 0 ? <p>Brak podprzestrzeni.</p> : null}
-            {children.map((child) => (
-              <button key={child.id} type="button" className="tile" onClick={() => setCurrentLocationId(child.id)}>
-                <span className="tile-title">{child.name}</span>
-                <span className="tile-meta">Urządzenia: {child.device_count ?? 0}</span>
-              </button>
-            ))}
+            <p className="menu-group-title">Urządzenia</p>
+            <MenuButton active={activePage === "devices-list"} onClick={() => setActivePage("devices-list")}>Urządzenia - przegląd</MenuButton>
+            <MenuButton active={activePage === "devices-add"} onClick={() => setActivePage("devices-add")}>Urządzenia - dodawanie</MenuButton>
+
+            <p className="menu-group-title">Topologia</p>
+            <MenuButton active={activePage === "topology"} onClick={() => setActivePage("topology")}>Topologia PNG</MenuButton>
+
+            {isAdmin ? (
+              <>
+                <p className="menu-group-title">Użytkownicy</p>
+                <MenuButton active={activePage === "users-list"} onClick={() => setActivePage("users-list")}>Użytkownicy - przegląd</MenuButton>
+                <MenuButton active={activePage === "users-add"} onClick={() => setActivePage("users-add")}>Użytkownicy - dodawanie</MenuButton>
+              </>
+            ) : null}
+          </aside>
+
+          <div className="content-panel">{renderPage()}</div>
+        </div>
+
+        {loading ? <p>Ładowanie danych...</p> : null}
+        {error ? <p className="error">{error}</p> : null}
+      </section>
+
+      <div className="toast-stack" aria-live="polite">
+        {toasts.map((toast) => (
+          <div key={toast.id} className={`toast ${toast.type}`}>
+            {toast.message}
           </div>
-
-          <section className="subpanel">
-            <h3>VLAN</h3>
-            {vlansLoading ? <p>Ładowanie VLAN...</p> : null}
-            {vlansError ? <p className="error">{vlansError}</p> : null}
-            {!vlansLoading && !vlansError && vlans.length === 0 ? <p>Brak VLAN dla tego roota.</p> : null}
-            {!vlansLoading && vlans.length > 0 ? (
-              <ul className="simple-list">
-                {vlans.map((vlan) => (
-                  <li key={vlan.id}>
-                    <strong>VLAN {vlan.vlan_id}</strong> - {vlan.name}
-                    {vlan.notes ? <span className="muted"> ({vlan.notes})</span> : null}
-                  </li>
-                ))}
-              </ul>
-            ) : null}
-
-            {isAdmin ? (
-              <form className="inline-form" onSubmit={onCreateVlan}>
-                <h4>Dodaj VLAN</h4>
-                <label htmlFor="vlan-id">VLAN ID</label>
-                <input
-                  id="vlan-id"
-                  inputMode="numeric"
-                  value={newVlan.vlanId}
-                  onChange={(event) => setNewVlan((prev) => ({ ...prev, vlanId: event.target.value }))}
-                  placeholder="10"
-                  required
-                />
-                <label htmlFor="vlan-name">Nazwa</label>
-                <input
-                  id="vlan-name"
-                  value={newVlan.name}
-                  onChange={(event) => setNewVlan((prev) => ({ ...prev, name: event.target.value }))}
-                  placeholder="LAN"
-                  required
-                />
-                <label htmlFor="vlan-notes">Notatki</label>
-                <input
-                  id="vlan-notes"
-                  value={newVlan.notes}
-                  onChange={(event) => setNewVlan((prev) => ({ ...prev, notes: event.target.value }))}
-                  placeholder="opcjonalnie"
-                />
-                <button type="submit" disabled={vlanSubmitting}>
-                  {vlanSubmitting ? "Zapisywanie..." : "Dodaj VLAN"}
-                </button>
-              </form>
-            ) : null}
-          </section>
-
-          <section className="subpanel">
-            <h3>Wi-Fi</h3>
-            <div className="field">
-              <label htmlFor="wifi-space-filter">Filtruj po przestrzeni</label>
-              <select
-                id="wifi-space-filter"
-                value={wifiFilterSpaceId}
-                onChange={(event) => setWifiFilterSpaceId(event.target.value)}
-              >
-                <option value="all">Wszystkie przestrzenie</option>
-                {spaces.map((space) => (
-                  <option key={space.id} value={space.id}>
-                    {space.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            {wifiLoading ? <p>Ładowanie Wi-Fi...</p> : null}
-            {wifiError ? <p className="error">{wifiError}</p> : null}
-            {!wifiLoading && filteredWifiNetworks.length === 0 ? <p>Brak sieci Wi-Fi w tym roocie.</p> : null}
-
-            {!wifiLoading && filteredWifiNetworks.length > 0 ? (
-              <div className="wifi-list">
-                {filteredWifiNetworks.map((network) => {
-                  const revealed = revealedPasswords[network.id];
-                  const spaceName = maps.byId.get(network.space_id)?.name || "Nieznana przestrzeń";
-                  return (
-                    <article key={network.id} className="wifi-card">
-                      <div>
-                        <h4>{network.ssid}</h4>
-                        <p className="muted">
-                          {network.security} | {spaceName}
-                        </p>
-                      </div>
-                      <p className="wifi-password">{revealed ? revealed : "••••••••••••"}</p>
-                      <div className="wifi-actions">
-                        <button type="button" onClick={() => onRevealWifi(network.id)}>
-                          Pokaż hasło
-                        </button>
-                        <button
-                          type="button"
-                          className="button-secondary"
-                          onClick={() => onCopyPassword(network.id)}
-                          disabled={!revealed}
-                        >
-                          Kopiuj hasło
-                        </button>
-                      </div>
-                    </article>
-                  );
-                })}
-              </div>
-            ) : null}
-
-            {isAdmin ? (
-              <form className="inline-form" onSubmit={onCreateWifi}>
-                <h4>Dodaj sieć Wi-Fi</h4>
-                <label htmlFor="wifi-ssid">SSID</label>
-                <input
-                  id="wifi-ssid"
-                  value={newWifi.ssid}
-                  onChange={(event) => setNewWifi((prev) => ({ ...prev, ssid: event.target.value }))}
-                  required
-                />
-
-                <label htmlFor="wifi-password">Hasło</label>
-                <input
-                  id="wifi-password"
-                  type="password"
-                  value={newWifi.password}
-                  onChange={(event) => setNewWifi((prev) => ({ ...prev, password: event.target.value }))}
-                  required
-                />
-
-                <label htmlFor="wifi-security">Security</label>
-                <input
-                  id="wifi-security"
-                  value={newWifi.security}
-                  onChange={(event) => setNewWifi((prev) => ({ ...prev, security: event.target.value }))}
-                  required
-                />
-
-                <label htmlFor="wifi-space">Przestrzeń</label>
-                <select
-                  id="wifi-space"
-                  value={newWifi.spaceId}
-                  onChange={(event) => setNewWifi((prev) => ({ ...prev, spaceId: event.target.value }))}
-                  required
-                >
-                  <option value="">Wybierz</option>
-                  {spaces.map((space) => (
-                    <option key={space.id} value={space.id}>
-                      {space.name}
-                    </option>
-                  ))}
-                </select>
-
-                <label htmlFor="wifi-vlan">VLAN</label>
-                <select
-                  id="wifi-vlan"
-                  value={newWifi.vlanId}
-                  onChange={(event) => setNewWifi((prev) => ({ ...prev, vlanId: event.target.value }))}
-                  required
-                >
-                  <option value="">Wybierz VLAN</option>
-                  {vlans.map((vlan) => (
-                    <option key={vlan.id} value={vlan.id}>
-                      VLAN {vlan.vlan_id} - {vlan.name}
-                    </option>
-                  ))}
-                </select>
-
-                <label htmlFor="wifi-notes">Notatki</label>
-                <input
-                  id="wifi-notes"
-                  value={newWifi.notes}
-                  onChange={(event) => setNewWifi((prev) => ({ ...prev, notes: event.target.value }))}
-                />
-
-                <button type="submit" disabled={wifiSubmitting}>
-                  {wifiSubmitting ? "Zapisywanie..." : "Dodaj Wi-Fi"}
-                </button>
-              </form>
-            ) : null}
-          </section>
-
-          <section className="subpanel">
-            <div className="panel-header">
-              <h3>Urządzenia w przestrzeni</h3>
-              {isAdmin ? (
-                <div className="wizard-actions">
-                  <button
-                    type="button"
-                    className="button-secondary"
-                    onClick={() => {
-                      setShowConnectionWizard((prev) => !prev);
-                    }}
-                  >
-                    {showConnectionWizard ? "Zamknij połączenia" : "Dodaj połączenie"}
-                  </button>
-                  <button
-                    type="button"
-                    className="button-secondary"
-                    onClick={() => {
-                      setShowDeviceWizard((prev) => !prev);
-                      setDeviceWizardStep(1);
-                    }}
-                  >
-                    {showDeviceWizard ? "Zamknij kreator" : "Dodaj urządzenie"}
-                  </button>
-                </div>
-              ) : null}
-            </div>
-
-            {devicesLoading ? <p>Ładowanie urządzeń...</p> : null}
-            {devicesError ? <p className="error">{devicesError}</p> : null}
-            {!devicesLoading && devices.length === 0 ? <p>Brak urządzeń w tej przestrzeni.</p> : null}
-            {!devicesLoading && devices.length > 0 ? (
-              <div className="device-list">
-                {devices.map((device) => (
-                  <button
-                    key={device.id}
-                    type="button"
-                    className={`device-item ${selectedDeviceId === device.id ? "is-active" : ""}`}
-                    onClick={() => setSelectedDeviceId(device.id)}
-                  >
-                    <strong>{device.name}</strong>
-                    <span className="muted">{device.type}</span>
-                    {device.is_receiver ? <span className="muted">odbiornik/koordynator</span> : null}
-                  </button>
-                ))}
-              </div>
-            ) : null}
-
-            {isAdmin && showDeviceWizard ? (
-              <form className="inline-form" onSubmit={onCreateDevice}>
-                <h4>Wizard: nowe urządzenie</h4>
-                {deviceWizardStep === 1 ? (
-                  <>
-                    <label htmlFor="device-name">Nazwa urządzenia</label>
-                    <input
-                      id="device-name"
-                      value={newDevice.name}
-                      onChange={(event) => setNewDevice((prev) => ({ ...prev, name: event.target.value }))}
-                      required
-                    />
-                    <label htmlFor="device-type">Typ</label>
-                    <input
-                      id="device-type"
-                      value={newDevice.type}
-                      onChange={(event) => setNewDevice((prev) => ({ ...prev, type: event.target.value }))}
-                      placeholder="router / switch / sensor..."
-                      required
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setDeviceWizardStep(2)}
-                      disabled={!newDevice.name || !newDevice.type}
-                    >
-                      Dalej
-                    </button>
-                  </>
-                ) : (
-                  <>
-                    <label htmlFor="device-vendor">Vendor</label>
-                    <input
-                      id="device-vendor"
-                      value={newDevice.vendor}
-                      onChange={(event) => setNewDevice((prev) => ({ ...prev, vendor: event.target.value }))}
-                    />
-                    <label htmlFor="device-model">Model</label>
-                    <input
-                      id="device-model"
-                      value={newDevice.model}
-                      onChange={(event) => setNewDevice((prev) => ({ ...prev, model: event.target.value }))}
-                    />
-                    <label htmlFor="device-serial">Serial</label>
-                    <input
-                      id="device-serial"
-                      value={newDevice.serial}
-                      onChange={(event) => setNewDevice((prev) => ({ ...prev, serial: event.target.value }))}
-                    />
-                    <label htmlFor="device-notes">Notatki</label>
-                    <input
-                      id="device-notes"
-                      value={newDevice.notes}
-                      onChange={(event) => setNewDevice((prev) => ({ ...prev, notes: event.target.value }))}
-                    />
-                    <label htmlFor="device-is-receiver" className="checkbox-row">
-                      <input
-                        id="device-is-receiver"
-                        type="checkbox"
-                        checked={newDevice.isReceiver}
-                        onChange={(event) =>
-                          setNewDevice((prev) => ({
-                            ...prev,
-                            isReceiver: event.target.checked,
-                            supportsWifi: event.target.checked ? prev.supportsWifi : false,
-                            supportsEthernet: event.target.checked ? prev.supportsEthernet : false,
-                            supportsZigbee: event.target.checked ? prev.supportsZigbee : false,
-                            supportsMatterThread: event.target.checked ? prev.supportsMatterThread : false,
-                            supportsBluetooth: event.target.checked ? prev.supportsBluetooth : false,
-                            supportsBle: event.target.checked ? prev.supportsBle : false,
-                          }))
-                        }
-                      />
-                      To urządzenie jest odbiornikiem / koordynatorem
-                    </label>
-                    <div className="checkbox-grid">
-                      <label htmlFor="device-cap-wifi" className="checkbox-row">
-                        <input
-                          id="device-cap-wifi"
-                          type="checkbox"
-                          checked={newDevice.supportsWifi}
-                          disabled={!newDevice.isReceiver}
-                          onChange={(event) =>
-                            setNewDevice((prev) => ({ ...prev, supportsWifi: event.target.checked }))
-                          }
-                        />
-                        Wi-Fi
-                      </label>
-                      <label htmlFor="device-cap-ethernet" className="checkbox-row">
-                        <input
-                          id="device-cap-ethernet"
-                          type="checkbox"
-                          checked={newDevice.supportsEthernet}
-                          disabled={!newDevice.isReceiver}
-                          onChange={(event) =>
-                            setNewDevice((prev) => ({ ...prev, supportsEthernet: event.target.checked }))
-                          }
-                        />
-                        Ethernet
-                      </label>
-                      <label htmlFor="device-cap-zigbee" className="checkbox-row">
-                        <input
-                          id="device-cap-zigbee"
-                          type="checkbox"
-                          checked={newDevice.supportsZigbee}
-                          disabled={!newDevice.isReceiver}
-                          onChange={(event) =>
-                            setNewDevice((prev) => ({ ...prev, supportsZigbee: event.target.checked }))
-                          }
-                        />
-                        Zigbee (koordynator)
-                      </label>
-                      <label htmlFor="device-cap-matter" className="checkbox-row">
-                        <input
-                          id="device-cap-matter"
-                          type="checkbox"
-                          checked={newDevice.supportsMatterThread}
-                          disabled={!newDevice.isReceiver}
-                          onChange={(event) =>
-                            setNewDevice((prev) => ({ ...prev, supportsMatterThread: event.target.checked }))
-                          }
-                        />
-                        Matter over Thread
-                      </label>
-                      <label htmlFor="device-cap-bluetooth" className="checkbox-row">
-                        <input
-                          id="device-cap-bluetooth"
-                          type="checkbox"
-                          checked={newDevice.supportsBluetooth}
-                          disabled={!newDevice.isReceiver}
-                          onChange={(event) =>
-                            setNewDevice((prev) => ({ ...prev, supportsBluetooth: event.target.checked }))
-                          }
-                        />
-                        Bluetooth
-                      </label>
-                      <label htmlFor="device-cap-ble" className="checkbox-row">
-                        <input
-                          id="device-cap-ble"
-                          type="checkbox"
-                          checked={newDevice.supportsBle}
-                          disabled={!newDevice.isReceiver}
-                          onChange={(event) =>
-                            setNewDevice((prev) => ({ ...prev, supportsBle: event.target.checked }))
-                          }
-                        />
-                        BLE
-                      </label>
-                    </div>
-                    <div className="wizard-actions">
-                      <button type="button" className="button-secondary" onClick={() => setDeviceWizardStep(1)}>
-                        Wstecz
-                      </button>
-                      <button type="submit" disabled={deviceSubmitting}>
-                        {deviceSubmitting ? "Zapisywanie..." : "Utwórz urządzenie"}
-                      </button>
-                    </div>
-                  </>
-                )}
-              </form>
-            ) : null}
-
-            {isAdmin && showConnectionWizard ? (
-              <form className="inline-form" onSubmit={onCreateConnection}>
-                <h4>Wizard: nowe połączenie</h4>
-                <label htmlFor="from-device">FROM urządzenie</label>
-                <select
-                  id="from-device"
-                  value={newConnection.fromDeviceId}
-                  onChange={(event) =>
-                    setNewConnection((prev) => ({
-                      ...prev,
-                      fromDeviceId: event.target.value,
-                      fromInterfaceId: "",
-                    }))
-                  }
-                  required
-                >
-                  <option value="">Wybierz</option>
-                  {rootDevices.map((device) => (
-                    <option key={device.id} value={device.id}>
-                      {device.name}
-                    </option>
-                  ))}
-                </select>
-
-                <label htmlFor="from-interface">FROM interfejs</label>
-                <select
-                  id="from-interface"
-                  value={newConnection.fromInterfaceId}
-                  onChange={(event) => setNewConnection((prev) => ({ ...prev, fromInterfaceId: event.target.value }))}
-                  required
-                >
-                  <option value="">Wybierz</option>
-                  {fromInterfaces.map((item) => (
-                    <option key={item.id} value={item.id}>
-                      {item.name} ({item.type})
-                    </option>
-                  ))}
-                </select>
-
-                <label htmlFor="to-device">TO urządzenie</label>
-                <select
-                  id="to-device"
-                  value={newConnection.toDeviceId}
-                  onChange={(event) =>
-                    setNewConnection((prev) => ({
-                      ...prev,
-                      toDeviceId: event.target.value,
-                      toInterfaceId: "",
-                    }))
-                  }
-                  required
-                >
-                  <option value="">Wybierz</option>
-                  {rootDevices.map((device) => (
-                    <option key={device.id} value={device.id}>
-                      {device.name}
-                    </option>
-                  ))}
-                </select>
-
-                <label htmlFor="to-interface">TO interfejs</label>
-                <select
-                  id="to-interface"
-                  value={newConnection.toInterfaceId}
-                  onChange={(event) => setNewConnection((prev) => ({ ...prev, toInterfaceId: event.target.value }))}
-                  required
-                >
-                  <option value="">Wybierz</option>
-                  {toInterfaces.map((item) => (
-                    <option key={item.id} value={item.id}>
-                      {item.name} ({item.type})
-                    </option>
-                  ))}
-                </select>
-
-                <label htmlFor="conn-tech">Technologia</label>
-                <select
-                  id="conn-tech"
-                  value={newConnection.technology}
-                  onChange={(event) => {
-                    const technology = event.target.value;
-                    setNewConnection((prev) => ({
-                      ...prev,
-                      technology,
-                      vlanId: technology === "ETHERNET" ? prev.vlanId : "",
-                      receiverId: RECEIVER_REQUIRED_TECHNOLOGIES.has(technology) ? prev.receiverId : "",
-                    }));
-                  }}
-                >
-                  <option value="ETHERNET">ETHERNET</option>
-                  <option value="FIBER">FIBER</option>
-                  <option value="WIFI">WIFI</option>
-                  <option value="ZIGBEE">Zigbee</option>
-                  <option value="MATTER_OVER_THREAD">Matter over Thread</option>
-                  <option value="BLUETOOTH">Bluetooth</option>
-                  <option value="BLE">BLE</option>
-                  <option value="SERIAL">SERIAL</option>
-                  <option value="OTHER">OTHER</option>
-                </select>
-
-                {newConnection.technology === "ETHERNET" ? (
-                  <>
-                    <label htmlFor="conn-vlan">VLAN</label>
-                    <select
-                      id="conn-vlan"
-                      value={newConnection.vlanId}
-                      onChange={(event) => setNewConnection((prev) => ({ ...prev, vlanId: event.target.value }))}
-                      required
-                    >
-                      <option value="">Wybierz VLAN</option>
-                      {vlans.map((vlan) => (
-                        <option key={vlan.id} value={vlan.id}>
-                          VLAN {vlan.vlan_id} - {vlan.name}
-                        </option>
-                      ))}
-                    </select>
-                  </>
-                ) : null}
-
-                {receiverRequiredForTechnology ? (
-                  <>
-                    <label htmlFor="conn-receiver">Odbiornik / koordynator</label>
-                    <select
-                      id="conn-receiver"
-                      value={newConnection.receiverId}
-                      onChange={(event) => setNewConnection((prev) => ({ ...prev, receiverId: event.target.value }))}
-                      required
-                    >
-                      <option value="">Wybierz odbiornik</option>
-                      {receiverCandidates.map((device) => (
-                        <option key={device.id} value={device.id}>
-                          {device.name}
-                        </option>
-                      ))}
-                    </select>
-                    {receiverCandidates.length === 0 ? (
-                      <p className="warning">
-                        Brak odbiornika z wymaganą technologią. Dodaj urządzenie odbiorcze i zaznacz odpowiedni checkbox
-                        capability.
-                      </p>
-                    ) : null}
-                  </>
-                ) : null}
-
-                <label htmlFor="conn-notes">Notatki</label>
-                <input
-                  id="conn-notes"
-                  value={newConnection.notes}
-                  onChange={(event) => setNewConnection((prev) => ({ ...prev, notes: event.target.value }))}
-                />
-                <button type="submit" disabled={connectionSubmitting}>
-                  {connectionSubmitting ? "Zapisywanie..." : "Utwórz połączenie"}
-                </button>
-              </form>
-            ) : null}
-
-            {selectedDeviceId ? (
-              <div className="device-detail">
-                <h4>Szczegóły urządzenia</h4>
-                {deviceDetailLoading ? <p>Ładowanie szczegółów...</p> : null}
-                {deviceDetailError ? <p className="error">{deviceDetailError}</p> : null}
-                {deviceDetail ? (
-                  <>
-                    <div className="detail-grid">
-                      <p>
-                        <strong>Nazwa:</strong> {deviceDetail.name}
-                      </p>
-                      <p>
-                        <strong>Typ:</strong> {deviceDetail.type}
-                      </p>
-                      <p>
-                        <strong>Vendor:</strong> {deviceDetail.vendor || "-"}
-                      </p>
-                      <p>
-                        <strong>Model:</strong> {deviceDetail.model || "-"}
-                      </p>
-                      <p>
-                        <strong>Serial:</strong> {deviceDetail.serial || "-"}
-                      </p>
-                      <p>
-                        <strong>Odbiornik:</strong>{" "}
-                        {deviceDetail.is_receiver
-                          ? [
-                              deviceDetail.supports_wifi ? "Wi-Fi" : null,
-                              deviceDetail.supports_ethernet ? "Ethernet" : null,
-                              deviceDetail.supports_zigbee ? "Zigbee" : null,
-                              deviceDetail.supports_matter_thread ? "Matter/Thread" : null,
-                              deviceDetail.supports_bluetooth ? "Bluetooth" : null,
-                              deviceDetail.supports_ble ? "BLE" : null,
-                            ]
-                              .filter(Boolean)
-                              .join(", ") || "tak"
-                          : "nie"}
-                      </p>
-                    </div>
-                    <h4>Interfejsy</h4>
-                    {deviceDetail.interfaces.length === 0 ? <p>Brak interfejsów.</p> : null}
-                    {deviceDetail.interfaces.length > 0 ? (
-                      <ul className="simple-list">
-                        {deviceDetail.interfaces.map((item) => (
-                          <li key={item.id}>
-                            <strong>{item.name}</strong> ({item.type}) {item.mac ? `- ${item.mac}` : ""}
-                          </li>
-                        ))}
-                      </ul>
-                    ) : null}
-
-                    <h4>Połączenia in/out</h4>
-                    {connectionsLoading ? <p>Ładowanie połączeń...</p> : null}
-                    {connectionsError ? <p className="error">{connectionsError}</p> : null}
-                    {!connectionsLoading && connections.length === 0 ? <p>Brak połączeń dla urządzenia.</p> : null}
-                    {!connectionsLoading && connections.length > 0 ? (
-                      <ul className="simple-list">
-                        {connections.map((connection) => {
-                          const outgoing = connection.from_device_id === selectedDeviceId;
-                          const peerDeviceId = outgoing ? connection.to_device_id : connection.from_device_id;
-                          const fromName = interfaceNameById.get(connection.from_interface_id) || connection.from_interface_id;
-                          const toName = interfaceNameById.get(connection.to_interface_id) || connection.to_interface_id;
-                          const receiverName = connection.receiver_id
-                            ? deviceNameById.get(connection.receiver_id) || connection.receiver_id
-                            : null;
-                          return (
-                            <li key={connection.id}>
-                              <strong>{outgoing ? "OUT" : "IN"}</strong> [{connection.technology}] {fromName}
-                              {" -> "}
-                              {toName}
-                              <span className="muted"> ({deviceNameById.get(peerDeviceId) || peerDeviceId})</span>
-                              {receiverName ? <span className="muted"> [receiver: {receiverName}]</span> : null}
-                            </li>
-                          );
-                        })}
-                      </ul>
-                    ) : null}
-
-                    {isAdmin ? (
-                      <form className="inline-form" onSubmit={onCreateInterface}>
-                        <h4>Dodaj interfejs</h4>
-                        <label htmlFor="int-name">Nazwa</label>
-                        <input
-                          id="int-name"
-                          value={newInterface.name}
-                          onChange={(event) => setNewInterface((prev) => ({ ...prev, name: event.target.value }))}
-                          placeholder="eth0"
-                          required
-                        />
-                        <label htmlFor="int-type">Typ</label>
-                        <input
-                          id="int-type"
-                          value={newInterface.type}
-                          onChange={(event) => setNewInterface((prev) => ({ ...prev, type: event.target.value }))}
-                          placeholder="ethernet"
-                          required
-                        />
-                        <label htmlFor="int-mac">MAC</label>
-                        <input
-                          id="int-mac"
-                          value={newInterface.mac}
-                          onChange={(event) => setNewInterface((prev) => ({ ...prev, mac: event.target.value }))}
-                        />
-                        <label htmlFor="int-notes">Notatki</label>
-                        <input
-                          id="int-notes"
-                          value={newInterface.notes}
-                          onChange={(event) => setNewInterface((prev) => ({ ...prev, notes: event.target.value }))}
-                        />
-                        <button type="submit" disabled={interfaceSubmitting}>
-                          {interfaceSubmitting ? "Dodawanie..." : "Dodaj interfejs"}
-                        </button>
-                      </form>
-                    ) : null}
-
-                    {isAdmin ? (
-                      <div className="inline-form">
-                        <h4>Secrets (ADMIN)</h4>
-                        {secretsLoading ? <p>Ładowanie sekretów...</p> : null}
-                        {secretsError ? <p className="error">{secretsError}</p> : null}
-                        {!secretsLoading && deviceSecrets.length === 0 ? (
-                          <p>Brak sekretów powiązanych z tym urządzeniem.</p>
-                        ) : null}
-                        {!secretsLoading && deviceSecrets.length > 0 ? (
-                          <ul className="simple-list">
-                            {deviceSecrets.map((secret) => (
-                              <li key={secret.id}>
-                                <strong>{secret.name}</strong> [{secret.type}]{" "}
-                                {revealedSecrets[secret.id] ? revealedSecrets[secret.id] : "••••••••••"}
-                                <button
-                                  type="button"
-                                  className="button-secondary"
-                                  onClick={() => onRevealSecret(secret.id)}
-                                  style={{ marginLeft: "0.6rem" }}
-                                >
-                                  Reveal
-                                </button>
-                              </li>
-                            ))}
-                          </ul>
-                        ) : null}
-
-                        <form onSubmit={onCreateSecret}>
-                          <h4>Dodaj sekret</h4>
-                          <label htmlFor="secret-type">Typ</label>
-                          <select
-                            id="secret-type"
-                            value={newSecret.type}
-                            onChange={(event) => setNewSecret((prev) => ({ ...prev, type: event.target.value }))}
-                          >
-                            <option value="PASSWORD">PASSWORD</option>
-                            <option value="TOKEN">TOKEN</option>
-                            <option value="API_KEY">API_KEY</option>
-                            <option value="OTHER">OTHER</option>
-                          </select>
-                          <label htmlFor="secret-name">Nazwa</label>
-                          <input
-                            id="secret-name"
-                            value={newSecret.name}
-                            onChange={(event) => setNewSecret((prev) => ({ ...prev, name: event.target.value }))}
-                            required
-                          />
-                          <label htmlFor="secret-value">Wartość</label>
-                          <input
-                            id="secret-value"
-                            type="password"
-                            value={newSecret.value}
-                            onChange={(event) => setNewSecret((prev) => ({ ...prev, value: event.target.value }))}
-                            required
-                          />
-                          <label htmlFor="secret-notes">Notatki</label>
-                          <input
-                            id="secret-notes"
-                            value={newSecret.notes}
-                            onChange={(event) => setNewSecret((prev) => ({ ...prev, notes: event.target.value }))}
-                          />
-                          <button type="submit" disabled={secretSubmitting}>
-                            {secretSubmitting ? "Zapisywanie..." : "Dodaj sekret"}
-                          </button>
-                        </form>
-                      </div>
-                    ) : null}
-                  </>
-                ) : null}
-              </div>
-            ) : null}
-          </section>
-
-          <section className="subpanel">
-            <h3>Graf topologii</h3>
-            <div className="graph-filters">
-              <div className="field">
-                <label htmlFor="graph-tech">Technologia</label>
-                <select
-                  id="graph-tech"
-                  value={graphTechnologyFilter}
-                  onChange={(event) => setGraphTechnologyFilter(event.target.value)}
-                >
-                  <option value="all">Wszystkie</option>
-                  {graphTechnologyOptions.map((option) => (
-                    <option key={option} value={option}>
-                      {option}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div className="field">
-                <label htmlFor="graph-space">Przestrzeń</label>
-                <select
-                  id="graph-space"
-                  value={graphSpaceFilter}
-                  onChange={(event) => setGraphSpaceFilter(event.target.value)}
-                >
-                  <option value="all">Wszystkie</option>
-                  {spaces.map((space) => (
-                    <option key={space.id} value={space.id}>
-                      {space.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div className="field">
-                <label htmlFor="graph-type">Typ urządzenia</label>
-                <select
-                  id="graph-type"
-                  value={graphTypeFilter}
-                  onChange={(event) => setGraphTypeFilter(event.target.value)}
-                >
-                  <option value="all">Wszystkie</option>
-                  {graphTypeOptions.map((option) => (
-                    <option key={option} value={option}>
-                      {option}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            </div>
-
-            <div className="graph-search">
-              <input
-                value={graphSearch}
-                onChange={(event) => setGraphSearch(event.target.value)}
-                placeholder="Szukaj urządzenia..."
-              />
-              <button type="button" onClick={onGraphSearch}>
-                Szukaj i centruj
-              </button>
-            </div>
-
-            {graphLoading ? <p>Ładowanie grafu...</p> : null}
-            {graphError ? <p className="error">{graphError}</p> : null}
-            {!graphLoading && !graphError ? (
-              <div className="graph-canvas" ref={graphContainerRef}>
-                {filteredGraph.devices.length === 0 ? <p>Brak danych grafu dla wybranych filtrów.</p> : null}
-              </div>
-            ) : null}
-          </section>
-        </>
-      ) : null}
-    </section>
+        ))}
+      </div>
+    </>
   );
 }
 
@@ -2311,7 +1901,7 @@ function App() {
     }
 
     const { response, payload } = await request("/auth/me", {
-      headers: { Authorization: `Bearer ${accessToken}` },
+      headers: authHeaders(accessToken),
     });
 
     if (!response.ok) {

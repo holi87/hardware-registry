@@ -2,99 +2,79 @@
 
 ## 1. Pierwsze uruchomienie
 
-1. Wejdź na UI (`http://localhost:8380` lub domena produkcyjna).
-2. Jeśli system jest pusty, zobaczysz ekran tworzenia pierwszego administratora.
-3. Utwórz konto admina (hasło musi spełniać politykę bezpieczeństwa).
+1. Wejdź na UI (`http://localhost:8380` albo domena produkcyjna).
+2. Jeśli baza jest pusta, pojawi się ekran **Utwórz admina**.
+3. Ustaw konto administratora (hasło: min. 12 znaków + duża/mała/cyfra/znak specjalny).
 
-## 2. Logowanie i role
+## 2. Układ aplikacji
 
-- `ADMIN`:
-  - pełna administracja (lokacje, VLAN, Wi-Fi, urządzenia, połączenia, sekrety)
-- `USER`:
-  - odczyt danych z przypisanych rootów
-  - może odsłaniać hasła Wi-Fi tylko dla swoich rootów
+Po zalogowaniu aplikacja działa w układzie menu z osobnymi podstronami:
 
-Po pierwszym logowaniu może być wymaganie zmiany hasła (`must_change_password`).
+- **Rooty**: rooty i przestrzenie
+- **Sieciowe**:
+  - VLAN - przegląd
+  - VLAN - dodawanie
+  - Wi-Fi - przegląd
+  - Wi-Fi - dodawanie
+- **Urządzenia**:
+  - Urządzenia - przegląd
+  - Urządzenia - dodawanie
+- **Topologia**:
+  - generowanie PNG na żądanie
+- **Użytkownicy** (tylko ADMIN):
+  - przegląd i edycja
+  - dodawanie
 
-## 3. Praca na drzewie lokalizacji
+## 3. Rooty i przestrzenie (ADMIN)
 
-1. Wybierz root (jeśli masz dostęp do wielu).
-2. Użyj breadcrumbów i kafli, aby przechodzić po przestrzeniach.
-3. Licznik na kaflu pokazuje liczbę urządzeń w danej przestrzeni.
+W podstronie **Rooty i przestrzenie** możesz:
+
+- dodać nowy root,
+- usunąć root (kasuje też dane podrzędne roota),
+- dodawać przestrzenie w drzewie lokalizacji.
 
 ## 4. VLAN
 
-W sekcji VLAN możesz:
+Dla VLAN zapisujesz:
 
-- przeglądać VLAN dla bieżącego roota
-- dodać nowy VLAN (ADMIN)
+- VLAN ID,
+- nazwę,
+- maskę,
+- zakres IP start/end,
+- notatki.
 
 ## 5. Wi-Fi
 
-W sekcji Wi-Fi możesz:
+- Wi-Fi zawsze jest przypisane do przestrzeni i VLAN.
+- Lista nie zwraca haseł plaintext.
+- „Pokaż” odsłania hasło na 30 sekund.
 
-- filtrować sieci po przestrzeni
-- dodać sieć Wi-Fi (ADMIN)
-- odsłonić hasło przyciskiem „Pokaż hasło”
-- przypisać VLAN (wymagany)
+## 6. Urządzenia
 
-Zasady haseł Wi-Fi:
+Dodajesz urządzenia z przypisaniem do przestrzeni.
 
-- lista Wi-Fi nie zwraca haseł plaintext
-- odsłonięte hasło automatycznie maskuje się po 30 sekundach
-- przy zmianie widoku hasła są maskowane natychmiast
+Jeśli urządzenie jest odbiornikiem/koordynatorem, możesz zaznaczyć capability:
 
-## 6. Urządzenia i interfejsy
-
-1. Wybierz przestrzeń.
-2. Dodaj urządzenie przez wizard (ADMIN).
-3. Jeśli urządzenie pełni rolę odbiornika/koordynatora, zaznacz to i wybierz technologie (checkboxy).
-4. Otwórz szczegóły urządzenia.
-5. Dodaj interfejsy (ADMIN).
-
-## 7. Połączenia
-
-W wizardze połączeń wybierasz:
-
-- FROM: urządzenie + interfejs
-- TO: urządzenie + interfejs
-- technologię połączenia
-
-Obsługiwane technologie:
-
-- ETHERNET
-- FIBER
-- WIFI
-- ZIGBEE
-- MATTER_OVER_THREAD
-- BLUETOOTH
+- Wi-Fi
+- Ethernet
+- Zigbee
+- Matter over Thread
+- Bluetooth
 - BLE
-- SERIAL
-- OTHER
 
-Dla `ETHERNET` wymagany jest VLAN.
+## 7. Topologia PNG
 
-Dla technologii bezprzewodowych wymagających bramki odbiorczej trzeba wskazać odbiornik/koordynator:
+Podstrona topologii generuje statyczny obraz PNG na żądanie dla aktywnego roota.
 
-- `ZIGBEE` -> odbiornik z capability `supports_zigbee`
-- `MATTER_OVER_THREAD` -> odbiornik z capability `supports_matter_thread`
-- `BLUETOOTH` -> odbiornik z capability `supports_bluetooth`
-- `BLE` -> odbiornik z capability `supports_ble`
+## 8. Użytkownicy i rooty (ADMIN)
 
-## 8. Graf topologii
+Admin może:
 
-Widok grafu pozwala:
+- tworzyć użytkowników,
+- edytować rolę, aktywność i przypisanie rootów,
+- ustawiać nowe hasło użytkownika (z wymuszeniem zmiany przy logowaniu).
 
-- filtrować po technologii, przestrzeni i typie urządzenia
-- wyszukiwać urządzenie i centruje widok na znalezionym węźle
+Zasada RBAC:
 
-## 9. Sekrety (ADMIN)
-
-W szczegółach urządzenia sekcja Secrets umożliwia:
-
-- zapis nowego sekretu (hasło/token/API key)
-- odsłonięcie wartości tylko przez endpoint reveal
-
-## 10. Szybkie akcje mobilne
-
-Na urządzeniach mobilnych dostępny jest przycisk `+` (sticky FAB), który otwiera szybkie akcje administracyjne.
+- **ADMIN**: pełny CRUD
+- **USER**: odczyt tylko dla przypisanych rootów
