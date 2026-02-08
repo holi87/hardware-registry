@@ -1,3 +1,7 @@
+name: hardware-prod
+
+name: hardware-prod
+
 services:
   db:
     image: postgres:16-alpine
