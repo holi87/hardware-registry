@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     JWT_REFRESH_TOKEN_EXPIRE_DAYS: int = 14
     APP_ENCRYPTION_KEY: str = "change-me-encryption-key"
+    ADMIN_RESET_KEY: str = "CHANGE_ME"
 
     model_config = SettingsConfigDict(
         env_file=".env",

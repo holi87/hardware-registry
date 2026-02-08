@@ -7,7 +7,12 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import require_admin, require_user
 from app.core.jwt import create_access_token, create_refresh_token, decode_token
-from app.core.security import verify_password
+from app.core.security import (
+    PASSWORD_POLICY_MESSAGE,
+    hash_password,
+    validate_password_policy,
+    verify_password,
+)
 from app.db.session import get_db
 from app.models.user import User
 
@@ -25,6 +30,15 @@ class RefreshRequest(BaseModel):
     refresh_token: str
 
 
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str
+
+
+class StatusResponse(BaseModel):
+    status: str
+
+
 class AuthTokensResponse(BaseModel):
     access_token: str
     refresh_token: str
@@ -36,6 +50,7 @@ class MeResponse(BaseModel):
     email: str
     role: str
     is_active: bool
+    must_change_password: bool
 
 
 class AdminCheckResponse(BaseModel):
@@ -89,7 +104,34 @@ def me(current_user: User = Depends(require_user)) -> MeResponse:
         email=current_user.email,
         role=current_user.role.value,
         is_active=current_user.is_active,
+        must_change_password=current_user.must_change_password,
     )
+
+
+@router.post("/change-password", response_model=StatusResponse)
+def change_password(
+    payload: ChangePasswordRequest,
+    current_user: User = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> StatusResponse:
+    if not verify_password(payload.current_password, current_user.password_hash):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Current password is incorrect")
+
+    if not validate_password_policy(payload.new_password):
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=PASSWORD_POLICY_MESSAGE)
+
+    if verify_password(payload.new_password, current_user.password_hash):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="New password must be different than current password",
+        )
+
+    current_user.password_hash = hash_password(payload.new_password)
+    current_user.must_change_password = False
+    db.add(current_user)
+    db.commit()
+
+    return StatusResponse(status="ok")
 
 
 @router.get("/admin-check", response_model=AdminCheckResponse)

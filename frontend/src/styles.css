@@ -66,6 +66,14 @@ button:disabled {
   background: #f8fafc;
 }
 
+.warning {
+  color: #7a2e00;
+  background: #fff4e5;
+  border: 1px solid #f5c791;
+  border-radius: 8px;
+  padding: 0.7rem;
+}
+
 .error {
   color: #b91c1c;
   font-weight: 600;

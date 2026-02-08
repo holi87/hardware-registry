@@ -145,6 +145,103 @@ function LoginScreen({ onLoggedIn }) {
   );
 }
 
+function ChangePasswordScreen({ me, onChanged }) {
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [info, setInfo] = useState("");
+
+  const canSubmit =
+    currentPassword.length > 0 &&
+    newPassword.length > 0 &&
+    confirmPassword.length > 0 &&
+    newPassword === confirmPassword;
+
+  const onSubmit = async (event) => {
+    event.preventDefault();
+    setLoading(true);
+    setError("");
+    setInfo("");
+
+    try {
+      const accessToken = localStorage.getItem(ACCESS_KEY);
+      if (!accessToken) {
+        throw new Error("Brak sesji użytkownika");
+      }
+
+      const response = await fetch(`${apiBase}/auth/change-password`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
+      });
+
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(data.detail || "Nie udało się zmienić hasła");
+      }
+
+      setCurrentPassword("");
+      setNewPassword("");
+      setConfirmPassword("");
+      setInfo("Hasło zostało zmienione.");
+      setTimeout(onChanged, 300);
+    } catch (err) {
+      setError(err.message || "Błąd zmiany hasła");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <section>
+      <h2>Wymagana zmiana hasła</h2>
+      <p className="warning">
+        Użytkownik <strong>{me.email}</strong> musi zmienić hasło jednorazowe przed dalszą pracą.
+      </p>
+      <form onSubmit={onSubmit}>
+        <label htmlFor="current-password">Aktualne hasło</label>
+        <input
+          id="current-password"
+          type="password"
+          value={currentPassword}
+          onChange={(e) => setCurrentPassword(e.target.value)}
+          required
+        />
+
+        <label htmlFor="new-password">Nowe hasło</label>
+        <input
+          id="new-password"
+          type="password"
+          value={newPassword}
+          onChange={(e) => setNewPassword(e.target.value)}
+          placeholder="Min. 12 znaków + złożoność"
+          required
+        />
+
+        <label htmlFor="confirm-password">Powtórz nowe hasło</label>
+        <input
+          id="confirm-password"
+          type="password"
+          value={confirmPassword}
+          onChange={(e) => setConfirmPassword(e.target.value)}
+          required
+        />
+
+        <button type="submit" disabled={!canSubmit || loading}>
+          {loading ? "Zapisywanie..." : "Zmień hasło"}
+        </button>
+      </form>
+      {error ? <p className="error">{error}</p> : null}
+      {info ? <p className="info">{info}</p> : null}
+    </section>
+  );
+}
+
 function MeCard({ me, onLogout }) {
   return (
     <section>
@@ -236,7 +333,12 @@ function App() {
 
       {!loading && !error && needsSetup ? <SetupAdminScreen onSetupDone={loadStatus} /> : null}
       {!loading && !error && !needsSetup && !me ? <LoginScreen onLoggedIn={fetchMe} /> : null}
-      {!loading && !error && !needsSetup && me ? <MeCard me={me} onLogout={handleLogout} /> : null}
+      {!loading && !error && !needsSetup && me && me.must_change_password ? (
+        <ChangePasswordScreen me={me} onChanged={fetchMe} />
+      ) : null}
+      {!loading && !error && !needsSetup && me && !me.must_change_password ? (
+        <MeCard me={me} onLogout={handleLogout} />
+      ) : null}
     </main>
   );
 }
