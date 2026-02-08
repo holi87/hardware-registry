@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import "./styles.css";
 
@@ -45,7 +45,7 @@ function authHeaders(accessToken, extra = {}) {
   };
 }
 
-function SetupAdminScreen({ onSetupDone }) {
+function SetupAdminScreen({ onSetupDone, notify }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
@@ -69,9 +69,12 @@ function SetupAdminScreen({ onSetupDone }) {
         throw new Error(parseApiError("Nie udało się utworzyć konta admina", payload));
       }
 
+      notify("Konto administratora zostało utworzone", "success");
       onSetupDone();
     } catch (err) {
-      setError(err.message || "Błąd podczas inicjalizacji");
+      const message = err.message || "Błąd podczas inicjalizacji";
+      setError(message);
+      notify(message, "error");
     } finally {
       setLoading(false);
     }
@@ -111,7 +114,7 @@ function SetupAdminScreen({ onSetupDone }) {
   );
 }
 
-function LoginScreen({ onLoggedIn }) {
+function LoginScreen({ onLoggedIn, notify }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
@@ -137,9 +140,12 @@ function LoginScreen({ onLoggedIn }) {
 
       localStorage.setItem(ACCESS_KEY, payload.access_token);
       localStorage.setItem(REFRESH_KEY, payload.refresh_token);
+      notify("Logowanie zakończone sukcesem", "success");
       onLoggedIn();
     } catch (err) {
-      setError(err.message || "Błąd logowania");
+      const message = err.message || "Błąd logowania";
+      setError(message);
+      notify(message, "error");
     } finally {
       setLoading(false);
     }
@@ -178,7 +184,7 @@ function LoginScreen({ onLoggedIn }) {
   );
 }
 
-function ChangePasswordScreen({ me, onChanged }) {
+function ChangePasswordScreen({ me, onChanged, notify }) {
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -217,10 +223,14 @@ function ChangePasswordScreen({ me, onChanged }) {
       setCurrentPassword("");
       setNewPassword("");
       setConfirmPassword("");
-      setInfo("Hasło zostało zmienione.");
+      const successMessage = "Hasło zostało zmienione.";
+      setInfo(successMessage);
+      notify(successMessage, "success");
       setTimeout(onChanged, 300);
     } catch (err) {
-      setError(err.message || "Błąd zmiany hasła");
+      const message = err.message || "Błąd zmiany hasła";
+      setError(message);
+      notify(message, "error");
     } finally {
       setLoading(false);
     }
@@ -294,7 +304,7 @@ function MenuButton({ active, onClick, children }) {
   );
 }
 
-function ExplorerScreen({ me, accessToken, onLogout }) {
+function ExplorerScreen({ me, accessToken, onLogout, notify }) {
   const [activePage, setActivePage] = useState("roots");
 
   const [roots, setRoots] = useState([]);
@@ -303,13 +313,14 @@ function ExplorerScreen({ me, accessToken, onLogout }) {
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-
-  const [toasts, setToasts] = useState([]);
-  const toastTimersRef = useRef(new Map());
   const lastErrorToastRef = useRef("");
 
   const [rootForm, setRootForm] = useState({ name: "", notes: "" });
+  const [editingRootId, setEditingRootId] = useState("");
+  const [rootEditForm, setRootEditForm] = useState({ name: "", notes: "" });
   const [spaceForm, setSpaceForm] = useState({ name: "", parentId: "", notes: "" });
+  const [editingSpaceId, setEditingSpaceId] = useState("");
+  const [spaceEditForm, setSpaceEditForm] = useState({ name: "", parentId: "", notes: "" });
 
   const [vlanList, setVlanList] = useState([]);
   const [vlanForm, setVlanForm] = useState({
@@ -426,24 +437,6 @@ function ExplorerScreen({ me, accessToken, onLogout }) {
     }
     return deviceList.filter((item) => item.space_id === deviceSpaceFilter);
   }, [deviceList, deviceSpaceFilter]);
-
-  const pushToast = (message, type = "success") => {
-    const id = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-    setToasts((prev) => [...prev, { id, message, type }]);
-    const timerId = setTimeout(() => {
-      setToasts((prev) => prev.filter((item) => item.id !== id));
-      toastTimersRef.current.delete(id);
-    }, 3200);
-    toastTimersRef.current.set(id, timerId);
-  };
-
-  const clearToasts = () => {
-    for (const timerId of toastTimersRef.current.values()) {
-      clearTimeout(timerId);
-    }
-    toastTimersRef.current.clear();
-    setToasts([]);
-  };
 
   const clearRevealedWifi = () => {
     for (const timerId of revealTimersRef.current.values()) {
@@ -592,9 +585,9 @@ function ExplorerScreen({ me, accessToken, onLogout }) {
       return;
     }
     lastErrorToastRef.current = error;
-    pushToast(error, "error");
+    notify(error, "error");
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [error]);
+  }, [error, notify]);
 
   useEffect(() => {
     let mounted = true;
@@ -626,7 +619,6 @@ function ExplorerScreen({ me, accessToken, onLogout }) {
     return () => {
       mounted = false;
       clearRevealedWifi();
-      clearToasts();
       if (topologyUrl) {
         URL.revokeObjectURL(topologyUrl);
       }
@@ -639,9 +631,11 @@ function ExplorerScreen({ me, accessToken, onLogout }) {
       return;
     }
     setError("");
+    setEditingRootId("");
     setEditingVlanId("");
     setEditingWifiId("");
     setEditingDeviceId("");
+    setEditingSpaceId("");
     refreshAllForRoot(selectedRootId).catch((err) => setError(err.message || "Błąd odświeżania danych"));
     if (topologyUrl) {
       URL.revokeObjectURL(topologyUrl);
@@ -691,9 +685,43 @@ function ExplorerScreen({ me, accessToken, onLogout }) {
       setRootForm({ name: "", notes: "" });
       await loadRoots();
       await loadUsers();
-      pushToast("Root został utworzony");
+      notify("Root został utworzony");
     } catch (err) {
       setError(err.message || "Błąd tworzenia roota");
+    }
+  };
+
+  const onStartEditRoot = (root) => {
+    setEditingRootId(root.id);
+    setRootEditForm({
+      name: root.name || "",
+      notes: root.notes || "",
+    });
+  };
+
+  const onSaveRoot = async (rootId) => {
+    if (!isAdmin) {
+      return;
+    }
+    setError("");
+    try {
+      const { response, payload } = await request(`/roots/${rootId}`, {
+        method: "PATCH",
+        headers: authHeaders(accessToken, { "Content-Type": "application/json" }),
+        body: JSON.stringify({
+          name: rootEditForm.name,
+          notes: rootEditForm.notes || null,
+        }),
+      });
+      if (!response.ok) {
+        throw new Error(parseApiError("Nie udało się zaktualizować roota", payload));
+      }
+      setEditingRootId("");
+      await loadRoots();
+      await loadUsers();
+      notify("Root zaktualizowany");
+    } catch (err) {
+      setError(err.message || "Błąd edycji roota");
     }
   };
 
@@ -701,7 +729,7 @@ function ExplorerScreen({ me, accessToken, onLogout }) {
     if (!isAdmin) {
       return;
     }
-    const confirmed = window.confirm("Usunąć ten root i wszystkie jego dane?");
+    const confirmed = window.confirm("Usunąć ten root?");
     if (!confirmed) {
       return;
     }
@@ -718,7 +746,7 @@ function ExplorerScreen({ me, accessToken, onLogout }) {
 
       await loadRoots();
       await loadUsers();
-      pushToast("Root został usunięty");
+      notify("Root został usunięty");
     } catch (err) {
       setError(err.message || "Błąd usuwania roota");
     }
@@ -746,9 +774,48 @@ function ExplorerScreen({ me, accessToken, onLogout }) {
       }
       setSpaceForm((prev) => ({ ...prev, name: "", notes: "" }));
       await loadSpaces(selectedRootId);
-      pushToast("Przestrzeń została utworzona");
+      notify("Przestrzeń została utworzona");
     } catch (err) {
       setError(err.message || "Błąd tworzenia przestrzeni");
+    }
+  };
+
+  const onStartEditSpace = (space) => {
+    setEditingSpaceId(space.id);
+    setSpaceEditForm({
+      name: space.name || "",
+      parentId: space.parent_id || selectedRootId,
+      notes: space.notes || "",
+    });
+  };
+
+  const onSaveSpace = async (spaceId) => {
+    if (!isAdmin || !selectedRootId) {
+      return;
+    }
+    if (!spaceEditForm.parentId) {
+      setError("Przestrzeń musi mieć parent");
+      return;
+    }
+    setError("");
+    try {
+      const { response, payload } = await request(`/locations/${spaceId}`, {
+        method: "PATCH",
+        headers: authHeaders(accessToken, { "Content-Type": "application/json" }),
+        body: JSON.stringify({
+          name: spaceEditForm.name,
+          parent_id: spaceEditForm.parentId,
+          notes: spaceEditForm.notes || null,
+        }),
+      });
+      if (!response.ok) {
+        throw new Error(parseApiError("Nie udało się zaktualizować przestrzeni", payload));
+      }
+      setEditingSpaceId("");
+      await loadSpaces(selectedRootId);
+      notify("Przestrzeń zaktualizowana");
+    } catch (err) {
+      setError(err.message || "Błąd edycji przestrzeni");
     }
   };
 
@@ -792,7 +859,7 @@ function ExplorerScreen({ me, accessToken, onLogout }) {
         notes: "",
       });
       await loadVlans(selectedRootId);
-      pushToast("VLAN zapisany poprawnie");
+      notify("VLAN zapisany poprawnie");
     } catch (err) {
       setError(err.message || "Błąd zapisu VLAN");
     }
@@ -829,7 +896,7 @@ function ExplorerScreen({ me, accessToken, onLogout }) {
 
       setWifiForm((prev) => ({ ...prev, ssid: "", password: "", notes: "" }));
       await loadWifi(selectedRootId);
-      pushToast("Wi-Fi zapisane poprawnie");
+      notify("Wi-Fi zapisane poprawnie");
     } catch (err) {
       setError(err.message || "Błąd zapisu Wi-Fi");
     }
@@ -860,7 +927,7 @@ function ExplorerScreen({ me, accessToken, onLogout }) {
         revealTimersRef.current.delete(wifiId);
       }, 30_000);
       revealTimersRef.current.set(wifiId, timeoutId);
-      pushToast("Hasło odsłonięte na 30 sekund");
+      notify("Hasło odsłonięte na 30 sekund");
     } catch (err) {
       setError(err.message || "Błąd reveal hasła Wi-Fi");
     }
@@ -913,7 +980,7 @@ function ExplorerScreen({ me, accessToken, onLogout }) {
         notes: "",
       }));
       await loadDevices(selectedRootId);
-      pushToast("Urządzenie zapisane poprawnie");
+      notify("Urządzenie zapisane poprawnie");
     } catch (err) {
       setError(err.message || "Błąd zapisu urządzenia");
     }
@@ -960,7 +1027,7 @@ function ExplorerScreen({ me, accessToken, onLogout }) {
       }
       setEditingVlanId("");
       await loadVlans(selectedRootId);
-      pushToast("VLAN zaktualizowany");
+      notify("VLAN zaktualizowany");
     } catch (err) {
       setError(err.message || "Błąd edycji VLAN");
     }
@@ -987,7 +1054,7 @@ function ExplorerScreen({ me, accessToken, onLogout }) {
       }
       await loadVlans(selectedRootId);
       await loadWifi(selectedRootId);
-      pushToast("VLAN usunięty");
+      notify("VLAN usunięty");
     } catch (err) {
       setError(err.message || "Błąd usuwania VLAN");
     }
@@ -1037,7 +1104,7 @@ function ExplorerScreen({ me, accessToken, onLogout }) {
       }
       setEditingWifiId("");
       await loadWifi(selectedRootId);
-      pushToast("Wi-Fi zaktualizowane");
+      notify("Wi-Fi zaktualizowane");
     } catch (err) {
       setError(err.message || "Błąd edycji Wi-Fi");
     }
@@ -1063,7 +1130,7 @@ function ExplorerScreen({ me, accessToken, onLogout }) {
         setEditingWifiId("");
       }
       await loadWifi(selectedRootId);
-      pushToast("Wi-Fi usunięte");
+      notify("Wi-Fi usunięte");
     } catch (err) {
       setError(err.message || "Błąd usuwania Wi-Fi");
     }
@@ -1125,7 +1192,7 @@ function ExplorerScreen({ me, accessToken, onLogout }) {
       }
       setEditingDeviceId("");
       await loadDevices(selectedRootId);
-      pushToast("Urządzenie zaktualizowane");
+      notify("Urządzenie zaktualizowane");
     } catch (err) {
       setError(err.message || "Błąd edycji urządzenia");
     }
@@ -1151,7 +1218,7 @@ function ExplorerScreen({ me, accessToken, onLogout }) {
         setEditingDeviceId("");
       }
       await loadDevices(selectedRootId);
-      pushToast("Urządzenie usunięte");
+      notify("Urządzenie usunięte");
     } catch (err) {
       setError(err.message || "Błąd usuwania urządzenia");
     }
@@ -1177,7 +1244,7 @@ function ExplorerScreen({ me, accessToken, onLogout }) {
       }
       const url = URL.createObjectURL(blob);
       setTopologyUrl(url);
-      pushToast("Wygenerowano PNG topologii");
+      notify("Wygenerowano PNG topologii");
     } catch (err) {
       setError(err.message || "Błąd generowania topologii");
     } finally {
@@ -1216,7 +1283,7 @@ function ExplorerScreen({ me, accessToken, onLogout }) {
 
       setUserForm({ email: "", password: "", role: "USER", isActive: true, rootIds: [] });
       await loadUsers();
-      pushToast("Użytkownik został utworzony");
+      notify("Użytkownik został utworzony");
     } catch (err) {
       setError(err.message || "Błąd tworzenia użytkownika");
     }
@@ -1246,7 +1313,7 @@ function ExplorerScreen({ me, accessToken, onLogout }) {
         throw new Error(parseApiError("Nie udało się zapisać użytkownika", payload));
       }
       await loadUsers();
-      pushToast("Zmiany użytkownika zapisane");
+      notify("Zmiany użytkownika zapisane");
     } catch (err) {
       setError(err.message || "Błąd zapisu użytkownika");
     }
@@ -1274,115 +1341,278 @@ function ExplorerScreen({ me, accessToken, onLogout }) {
       }
       setPasswordDrafts((prev) => ({ ...prev, [userId]: "" }));
       await loadUsers();
-      pushToast("Hasło użytkownika zostało zmienione");
+      notify("Hasło użytkownika zostało zmienione");
     } catch (err) {
       setError(err.message || "Błąd ustawiania hasła");
     }
   };
 
-  const renderRootsPage = () => (
-    <section className="subpanel page-panel">
-      <h3>Rooty i przestrzenie</h3>
-      <p className="muted">Zarządzanie root lokalizacjami oraz podprzestrzeniami (tylko ADMIN).</p>
+  const renderRootsPage = () => {
+    const nonRootSpaces = spaces.filter((space) => space.id !== selectedRootId);
 
-      <div className="table-wrap">
-        <table className="data-table">
-          <thead>
-            <tr>
-              <th>Root</th>
-              <th>Notatki</th>
-              <th>Akcje</th>
-            </tr>
-          </thead>
-          <tbody>
-            {roots.length === 0 ? (
+    return (
+      <section className="subpanel page-panel">
+        <h3>Rooty i przestrzenie</h3>
+        <p className="muted">Zarządzanie root lokalizacjami oraz podprzestrzeniami (tylko ADMIN).</p>
+
+        <div className="table-wrap">
+          <table className="data-table">
+            <thead>
               <tr>
-                <td colSpan={3}>Brak rootów</td>
+                <th>Root</th>
+                <th>Notatki</th>
+                <th>Akcje</th>
               </tr>
-            ) : (
-              roots.map((root) => (
-                <tr key={root.id}>
-                  <td>
-                    <button
-                      type="button"
-                      className={`link-btn ${selectedRootId === root.id ? "active" : ""}`}
-                      onClick={() => setSelectedRootId(root.id)}
-                    >
-                      {root.name}
-                    </button>
-                  </td>
-                  <td>{root.notes || "-"}</td>
-                  <td>
-                    {isAdmin ? (
-                      <button type="button" className="button-secondary" onClick={() => onDeleteRoot(root.id)}>
-                        Usuń root
-                      </button>
-                    ) : (
-                      "-"
-                    )}
-                  </td>
+            </thead>
+            <tbody>
+              {roots.length === 0 ? (
+                <tr>
+                  <td colSpan={3}>Brak rootów</td>
                 </tr>
-              ))
-            )}
-          </tbody>
-        </table>
-      </div>
+              ) : (
+                roots.map((root) => {
+                  const isEditingRoot = isAdmin && editingRootId === root.id;
+                  return (
+                    <React.Fragment key={root.id}>
+                      <tr>
+                        <td>
+                          <button
+                            type="button"
+                            className={`link-btn ${selectedRootId === root.id ? "active" : ""}`}
+                            onClick={() => setSelectedRootId(root.id)}
+                          >
+                            {root.name}
+                          </button>
+                        </td>
+                        <td>{root.notes || "-"}</td>
+                        <td>
+                          {isAdmin ? (
+                            <div className="table-actions">
+                              <button type="button" className="button-secondary" onClick={() => onStartEditRoot(root)}>
+                                {isEditingRoot ? "Edytujesz" : "Edytuj"}
+                              </button>
+                              <button type="button" className="button-danger" onClick={() => onDeleteRoot(root.id)}>
+                                Usuń root
+                              </button>
+                            </div>
+                          ) : (
+                            "-"
+                          )}
+                        </td>
+                      </tr>
+                      {isEditingRoot ? (
+                        <tr className="edit-row">
+                          <td colSpan={3}>
+                            <form
+                              className="inline-form compact-form"
+                              onSubmit={(event) => {
+                                event.preventDefault();
+                                onSaveRoot(root.id);
+                              }}
+                            >
+                              <h4>Edycja roota</h4>
+                              <div className="edit-grid">
+                                <div>
+                                  <label htmlFor={`root-edit-name-${root.id}`}>Nazwa</label>
+                                  <input
+                                    id={`root-edit-name-${root.id}`}
+                                    value={rootEditForm.name}
+                                    onChange={(event) => setRootEditForm((prev) => ({ ...prev, name: event.target.value }))}
+                                    required
+                                  />
+                                </div>
+                                <div>
+                                  <label htmlFor={`root-edit-notes-${root.id}`}>Notatki</label>
+                                  <input
+                                    id={`root-edit-notes-${root.id}`}
+                                    value={rootEditForm.notes}
+                                    onChange={(event) => setRootEditForm((prev) => ({ ...prev, notes: event.target.value }))}
+                                  />
+                                </div>
+                              </div>
+                              <div className="table-actions">
+                                <button type="submit">Zapisz</button>
+                                <button type="button" className="button-secondary" onClick={() => setEditingRootId("")}>
+                                  Anuluj
+                                </button>
+                              </div>
+                            </form>
+                          </td>
+                        </tr>
+                      ) : null}
+                    </React.Fragment>
+                  );
+                })
+              )}
+            </tbody>
+          </table>
+        </div>
 
-      {isAdmin ? (
-        <>
-          <form className="inline-form" onSubmit={onCreateRoot}>
-            <h4>Dodaj root</h4>
-            <label htmlFor="root-name">Nazwa</label>
-            <input
-              id="root-name"
-              value={rootForm.name}
-              onChange={(event) => setRootForm((prev) => ({ ...prev, name: event.target.value }))}
-              required
-            />
-            <label htmlFor="root-notes">Notatki</label>
-            <input
-              id="root-notes"
-              value={rootForm.notes}
-              onChange={(event) => setRootForm((prev) => ({ ...prev, notes: event.target.value }))}
-            />
-            <button type="submit">Dodaj root</button>
-          </form>
+        {selectedRootId ? (
+          <div className="table-wrap">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Przestrzeń</th>
+                  <th>Parent</th>
+                  <th>Urządzenia</th>
+                  <th>Notatki</th>
+                  <th>Akcje</th>
+                </tr>
+              </thead>
+              <tbody>
+                {nonRootSpaces.length === 0 ? (
+                  <tr>
+                    <td colSpan={5}>Brak podprzestrzeni dla wybranego roota</td>
+                  </tr>
+                ) : (
+                  nonRootSpaces.map((space) => {
+                    const parent = spaces.find((node) => node.id === space.parent_id);
+                    const isEditingSpace = isAdmin && editingSpaceId === space.id;
+                    const allowedParents = spaces.filter((node) => node.id !== space.id);
+                    return (
+                      <React.Fragment key={space.id}>
+                        <tr>
+                          <td>{`${"\u00A0\u00A0".repeat(space.depth || 0)}${space.name}`}</td>
+                          <td>{parent?.name || "-"}</td>
+                          <td>{space.device_count || 0}</td>
+                          <td>{space.notes || "-"}</td>
+                          <td>
+                            {isAdmin ? (
+                              <button type="button" className="button-secondary" onClick={() => onStartEditSpace(space)}>
+                                {isEditingSpace ? "Edytujesz" : "Edytuj"}
+                              </button>
+                            ) : (
+                              "-"
+                            )}
+                          </td>
+                        </tr>
+                        {isEditingSpace ? (
+                          <tr className="edit-row">
+                            <td colSpan={5}>
+                              <form
+                                className="inline-form compact-form"
+                                onSubmit={(event) => {
+                                  event.preventDefault();
+                                  onSaveSpace(space.id);
+                                }}
+                              >
+                                <h4>Edycja przestrzeni</h4>
+                                <div className="edit-grid">
+                                  <div>
+                                    <label htmlFor={`space-edit-name-${space.id}`}>Nazwa</label>
+                                    <input
+                                      id={`space-edit-name-${space.id}`}
+                                      value={spaceEditForm.name}
+                                      onChange={(event) =>
+                                        setSpaceEditForm((prev) => ({ ...prev, name: event.target.value }))
+                                      }
+                                      required
+                                    />
+                                  </div>
+                                  <div>
+                                    <label htmlFor={`space-edit-parent-${space.id}`}>Parent</label>
+                                    <select
+                                      id={`space-edit-parent-${space.id}`}
+                                      value={spaceEditForm.parentId}
+                                      onChange={(event) =>
+                                        setSpaceEditForm((prev) => ({ ...prev, parentId: event.target.value }))
+                                      }
+                                      required
+                                    >
+                                      {allowedParents.map((node) => (
+                                        <option key={`${space.id}-${node.id}`} value={node.id}>
+                                          {`${"\u00A0\u00A0".repeat(node.depth || 0)}${node.name}`}
+                                        </option>
+                                      ))}
+                                    </select>
+                                  </div>
+                                  <div className="span-2">
+                                    <label htmlFor={`space-edit-notes-${space.id}`}>Notatki</label>
+                                    <input
+                                      id={`space-edit-notes-${space.id}`}
+                                      value={spaceEditForm.notes}
+                                      onChange={(event) =>
+                                        setSpaceEditForm((prev) => ({ ...prev, notes: event.target.value }))
+                                      }
+                                    />
+                                  </div>
+                                </div>
+                                <div className="table-actions">
+                                  <button type="submit">Zapisz</button>
+                                  <button type="button" className="button-secondary" onClick={() => setEditingSpaceId("")}>
+                                    Anuluj
+                                  </button>
+                                </div>
+                              </form>
+                            </td>
+                          </tr>
+                        ) : null}
+                      </React.Fragment>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
+        ) : null}
 
-          {selectedRootId ? (
-            <form className="inline-form" onSubmit={onCreateSpace}>
-              <h4>Dodaj przestrzeń (root: {selectedRoot?.name || selectedRootId})</h4>
-              <label htmlFor="space-name">Nazwa</label>
+        {isAdmin ? (
+          <>
+            <form className="inline-form" onSubmit={onCreateRoot}>
+              <h4>Dodaj root</h4>
+              <label htmlFor="root-name">Nazwa</label>
               <input
-                id="space-name"
-                value={spaceForm.name}
-                onChange={(event) => setSpaceForm((prev) => ({ ...prev, name: event.target.value }))}
+                id="root-name"
+                value={rootForm.name}
+                onChange={(event) => setRootForm((prev) => ({ ...prev, name: event.target.value }))}
                 required
               />
-              <label htmlFor="space-parent">Parent</label>
-              <select
-                id="space-parent"
-                value={spaceForm.parentId || selectedRootId}
-                onChange={(event) => setSpaceForm((prev) => ({ ...prev, parentId: event.target.value }))}
-              >
-                {spaceOptions.map((space) => (
-                  <option key={space.id} value={space.id}>
-                    {space.label}
-                  </option>
-                ))}
-              </select>
-              <label htmlFor="space-notes">Notatki</label>
+              <label htmlFor="root-notes">Notatki</label>
               <input
-                id="space-notes"
-                value={spaceForm.notes}
-                onChange={(event) => setSpaceForm((prev) => ({ ...prev, notes: event.target.value }))}
+                id="root-notes"
+                value={rootForm.notes}
+                onChange={(event) => setRootForm((prev) => ({ ...prev, notes: event.target.value }))}
               />
-              <button type="submit">Dodaj przestrzeń</button>
+              <button type="submit">Dodaj root</button>
             </form>
-          ) : null}
-        </>
-      ) : null}
-    </section>
-  );
+
+            {selectedRootId ? (
+              <form className="inline-form" onSubmit={onCreateSpace}>
+                <h4>Dodaj przestrzeń (root: {selectedRoot?.name || selectedRootId})</h4>
+                <label htmlFor="space-name">Nazwa</label>
+                <input
+                  id="space-name"
+                  value={spaceForm.name}
+                  onChange={(event) => setSpaceForm((prev) => ({ ...prev, name: event.target.value }))}
+                  required
+                />
+                <label htmlFor="space-parent">Parent</label>
+                <select
+                  id="space-parent"
+                  value={spaceForm.parentId || selectedRootId}
+                  onChange={(event) => setSpaceForm((prev) => ({ ...prev, parentId: event.target.value }))}
+                >
+                  {spaceOptions.map((space) => (
+                    <option key={space.id} value={space.id}>
+                      {space.label}
+                    </option>
+                  ))}
+                </select>
+                <label htmlFor="space-notes">Notatki</label>
+                <input
+                  id="space-notes"
+                  value={spaceForm.notes}
+                  onChange={(event) => setSpaceForm((prev) => ({ ...prev, notes: event.target.value }))}
+                />
+                <button type="submit">Dodaj przestrzeń</button>
+              </form>
+            ) : null}
+          </>
+        ) : null}
+      </section>
+    );
+  };
 
   const renderVlanListPage = () => (
     <section className="subpanel page-panel">
@@ -2523,8 +2753,7 @@ function ExplorerScreen({ me, accessToken, onLogout }) {
   };
 
   return (
-    <>
-      <section className="panel">
+    <section className="panel">
         <div className="panel-header">
           <div>
             <h2>Hardware Registry</h2>
@@ -2603,15 +2832,6 @@ function ExplorerScreen({ me, accessToken, onLogout }) {
         {loading ? <p>Ładowanie danych...</p> : null}
         {error ? <p className="error">{error}</p> : null}
       </section>
-
-      <div className="toast-stack" aria-live="polite">
-        {toasts.map((toast) => (
-          <div key={toast.id} className={`toast ${toast.type}`}>
-            {toast.message}
-          </div>
-        ))}
-      </div>
-    </>
   );
 }
 
@@ -2620,6 +2840,21 @@ function App() {
   const [needsSetup, setNeedsSetup] = useState(false);
   const [me, setMe] = useState(null);
   const [error, setError] = useState("");
+  const [toasts, setToasts] = useState([]);
+  const toastTimersRef = useRef(new Map());
+
+  const notify = useCallback((message, type = "success") => {
+    if (!message) {
+      return;
+    }
+    const id = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    setToasts((prev) => [...prev, { id, message, type }]);
+    const timerId = setTimeout(() => {
+      setToasts((prev) => prev.filter((item) => item.id !== id));
+      toastTimersRef.current.delete(id);
+    }, 3200);
+    toastTimersRef.current.set(id, timerId);
+  }, []);
 
   const fetchMe = async () => {
     const accessToken = localStorage.getItem(ACCESS_KEY);
@@ -2636,6 +2871,7 @@ function App() {
       localStorage.removeItem(ACCESS_KEY);
       localStorage.removeItem(REFRESH_KEY);
       setMe(null);
+      notify("Sesja wygasła. Zaloguj się ponownie.", "info");
       return;
     }
 
@@ -2661,7 +2897,9 @@ function App() {
         setMe(null);
       }
     } catch (err) {
-      setError(err.message || "Nie można pobrać statusu setup");
+      const message = err.message || "Nie można pobrać statusu setup";
+      setError(message);
+      notify(message, "error");
     } finally {
       setLoading(false);
     }
@@ -2671,10 +2909,18 @@ function App() {
     localStorage.removeItem(ACCESS_KEY);
     localStorage.removeItem(REFRESH_KEY);
     setMe(null);
+    notify("Wylogowano", "info");
   };
 
   useEffect(() => {
     loadStatus();
+    return () => {
+      for (const timerId of toastTimersRef.current.values()) {
+        clearTimeout(timerId);
+      }
+      toastTimersRef.current.clear();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   return (
@@ -2687,14 +2933,27 @@ function App() {
       {loading ? <p>Sprawdzanie statusu...</p> : null}
       {error ? <p className="error">{error}</p> : null}
 
-      {!loading && !error && needsSetup ? <SetupAdminScreen onSetupDone={loadStatus} /> : null}
-      {!loading && !error && !needsSetup && !me ? <LoginScreen onLoggedIn={fetchMe} /> : null}
+      {!loading && !error && needsSetup ? <SetupAdminScreen onSetupDone={loadStatus} notify={notify} /> : null}
+      {!loading && !error && !needsSetup && !me ? <LoginScreen onLoggedIn={fetchMe} notify={notify} /> : null}
       {!loading && !error && !needsSetup && me && me.must_change_password ? (
-        <ChangePasswordScreen me={me} onChanged={fetchMe} />
+        <ChangePasswordScreen me={me} onChanged={fetchMe} notify={notify} />
       ) : null}
       {!loading && !error && !needsSetup && me && !me.must_change_password ? (
-        <ExplorerScreen me={me} accessToken={localStorage.getItem(ACCESS_KEY)} onLogout={handleLogout} />
+        <ExplorerScreen
+          me={me}
+          accessToken={localStorage.getItem(ACCESS_KEY)}
+          onLogout={handleLogout}
+          notify={notify}
+        />
       ) : null}
+
+      <div className="toast-stack" aria-live="polite">
+        {toasts.map((toast) => (
+          <div key={toast.id} className={`toast ${toast.type}`}>
+            {toast.message}
+          </div>
+        ))}
+      </div>
     </main>
   );
 }
