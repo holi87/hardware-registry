@@ -12,9 +12,14 @@ from sqlalchemy.orm import Session
 from app.api.deps import require_admin, require_user
 from app.api.root_access import ensure_root_exists, get_accessible_root_ids, require_root_access
 from app.db.session import get_db
+from app.models.connection import Connection
 from app.models.device import Device
 from app.models.location import Location
+from app.models.secret import Secret
 from app.models.user import User
+from app.models.user_root import UserRoot
+from app.models.vlan import Vlan
+from app.models.wifi_network import WifiNetwork
 
 router = APIRouter(tags=["locations"])
 
@@ -199,6 +204,37 @@ def delete_root(
     db: Session = Depends(get_db),
 ) -> dict[str, str]:
     root = ensure_root_exists(db, root_id)
+
+    spaces_dependencies = (
+        db.scalar(select(func.count(Location.id)).where(Location.root_id == root.id, Location.id != root.id)) or 0
+    )
+    user_root_dependencies = db.scalar(select(func.count(UserRoot.user_id)).where(UserRoot.root_id == root.id)) or 0
+    device_dependencies = db.scalar(select(func.count(Device.id)).where(Device.root_id == root.id)) or 0
+    vlan_dependencies = db.scalar(select(func.count(Vlan.id)).where(Vlan.root_id == root.id)) or 0
+    wifi_dependencies = db.scalar(select(func.count(WifiNetwork.id)).where(WifiNetwork.root_id == root.id)) or 0
+    connection_dependencies = db.scalar(select(func.count(Connection.id)).where(Connection.root_id == root.id)) or 0
+    secret_dependencies = db.scalar(select(func.count(Secret.id)).where(Secret.root_id == root.id)) or 0
+
+    if (
+        spaces_dependencies
+        or user_root_dependencies
+        or device_dependencies
+        or vlan_dependencies
+        or wifi_dependencies
+        or connection_dependencies
+        or secret_dependencies
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "Cannot delete root with dependencies. "
+                f"Spaces: {spaces_dependencies}, user assignments: {user_root_dependencies}, "
+                f"devices: {device_dependencies}, VLANs: {vlan_dependencies}, "
+                f"Wi-Fi: {wifi_dependencies}, connections: {connection_dependencies}, "
+                f"secrets: {secret_dependencies}. Remove or edit dependencies first."
+            ),
+        )
+
     db.delete(root)
     db.commit()
     return {"status": "ok"}

@@ -306,6 +306,7 @@ function ExplorerScreen({ me, accessToken, onLogout }) {
 
   const [toasts, setToasts] = useState([]);
   const toastTimersRef = useRef(new Map());
+  const lastErrorToastRef = useRef("");
 
   const [rootForm, setRootForm] = useState({ name: "", notes: "" });
   const [spaceForm, setSpaceForm] = useState({ name: "", parentId: "", notes: "" });
@@ -581,6 +582,19 @@ function ExplorerScreen({ me, accessToken, onLogout }) {
     }
     await Promise.all([loadSpaces(rootId), loadVlans(rootId), loadWifi(rootId), loadDevices(rootId)]);
   };
+
+  useEffect(() => {
+    if (!error) {
+      lastErrorToastRef.current = "";
+      return;
+    }
+    if (lastErrorToastRef.current === error) {
+      return;
+    }
+    lastErrorToastRef.current = error;
+    pushToast(error, "error");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [error]);
 
   useEffect(() => {
     let mounted = true;

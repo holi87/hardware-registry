@@ -6,6 +6,8 @@ from fastapi import HTTPException
 from pydantic import ValidationError
 
 from app.api import connections as connections_module
+from app.api import devices as devices_module
+from app.api import locations as locations_module
 from app.api import root_access as root_access_module
 from app.api import setup as setup_api
 from app.api import wifi as wifi_module
@@ -130,6 +132,28 @@ class FakeDeviceDb:
         return self._devices_by_id.get(entity_id)
 
 
+class FakeDeleteDb:
+    def __init__(self, entity=None, scalar_results=None):
+        self._entity = entity
+        self._scalar_results = list(scalar_results or [])
+        self.deleted = []
+        self.committed = False
+
+    def get(self, _model, _id):
+        return self._entity
+
+    def scalar(self, *_args, **_kwargs):
+        if not self._scalar_results:
+            return 0
+        return self._scalar_results.pop(0)
+
+    def delete(self, entity):
+        self.deleted.append(entity)
+
+    def commit(self):
+        self.committed = True
+
+
 def test_connection_receiver_is_required_for_zigbee():
     with pytest.raises(HTTPException) as exc:
         connections_module._validate_receiver(
@@ -185,3 +209,57 @@ def test_connection_receiver_accepts_valid_receiver():
     )
 
     assert validated == receiver_id
+
+
+def test_delete_device_blocks_when_dependencies_exist():
+    device = SimpleNamespace(id=uuid.uuid4())
+    db = FakeDeleteDb(entity=device, scalar_results=[1, 0, 0])
+
+    with pytest.raises(HTTPException) as exc:
+        devices_module.delete_device(device.id, SimpleNamespace(role=UserRole.ADMIN), db)
+
+    assert exc.value.status_code == 409
+    assert "Cannot delete device with dependencies" in str(exc.value.detail)
+    assert db.deleted == []
+    assert db.committed is False
+
+
+def test_delete_device_succeeds_without_dependencies():
+    device = SimpleNamespace(id=uuid.uuid4())
+    db = FakeDeleteDb(entity=device, scalar_results=[0, 0, 0])
+
+    response = devices_module.delete_device(device.id, SimpleNamespace(role=UserRole.ADMIN), db)
+
+    assert response["status"] == "ok"
+    assert db.deleted == [device]
+    assert db.committed is True
+
+
+def test_delete_root_blocks_when_dependencies_exist(monkeypatch):
+    root_id = uuid.uuid4()
+    root = SimpleNamespace(id=root_id, root_id=root_id)
+    db = FakeDeleteDb(entity=root, scalar_results=[1, 0, 0, 0, 0, 0, 0])
+
+    monkeypatch.setattr(locations_module, "ensure_root_exists", lambda _db, _root_id: root)
+
+    with pytest.raises(HTTPException) as exc:
+        locations_module.delete_root(root_id, SimpleNamespace(role=UserRole.ADMIN), db)
+
+    assert exc.value.status_code == 409
+    assert "Cannot delete root with dependencies" in str(exc.value.detail)
+    assert db.deleted == []
+    assert db.committed is False
+
+
+def test_delete_root_succeeds_without_dependencies(monkeypatch):
+    root_id = uuid.uuid4()
+    root = SimpleNamespace(id=root_id, root_id=root_id)
+    db = FakeDeleteDb(entity=root, scalar_results=[0, 0, 0, 0, 0, 0, 0])
+
+    monkeypatch.setattr(locations_module, "ensure_root_exists", lambda _db, _root_id: root)
+
+    response = locations_module.delete_root(root_id, SimpleNamespace(role=UserRole.ADMIN), db)
+
+    assert response["status"] == "ok"
+    assert db.deleted == [root]
+    assert db.committed is True

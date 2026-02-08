@@ -319,6 +319,18 @@ button:disabled {
   font-size: 0.9rem;
 }
 
+.toast.success {
+  background: #0f172a;
+}
+
+.toast.error {
+  background: #991b1b;
+}
+
+.toast.info {
+  background: #1d4ed8;
+}
+
 @media (max-width: 640px) {
   .graph-search {
     grid-template-columns: 1fr;

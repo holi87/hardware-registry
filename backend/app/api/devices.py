@@ -3,15 +3,17 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.api.deps import require_admin, require_user
 from app.api.root_access import ensure_root_exists, require_root_access
 from app.db.session import get_db
+from app.models.connection import Connection
 from app.models.device import Device
 from app.models.interface import Interface
 from app.models.location import Location
+from app.models.secret import Secret
 from app.models.user import User
 
 router = APIRouter(prefix="/devices", tags=["devices"])
@@ -327,6 +329,21 @@ def delete_device(
     device = db.get(Device, device_id)
     if device is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Device not found")
+
+    interface_dependencies = db.scalar(select(func.count(Interface.id)).where(Interface.device_id == device.id)) or 0
+    receiver_dependencies = db.scalar(select(func.count(Connection.id)).where(Connection.receiver_id == device.id)) or 0
+    secret_dependencies = db.scalar(select(func.count(Secret.id)).where(Secret.linked_device_id == device.id)) or 0
+    if interface_dependencies or receiver_dependencies or secret_dependencies:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "Cannot delete device with dependencies. "
+                f"Linked interfaces: {interface_dependencies}, "
+                f"receiver assignments: {receiver_dependencies}, "
+                f"linked secrets: {secret_dependencies}. "
+                "Remove or edit dependencies first."
+            ),
+        )
 
     db.delete(device)
     db.commit()
