@@ -3,11 +3,14 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
+from pydantic import ValidationError
 
+from app.api import connections as connections_module
 from app.api import root_access as root_access_module
 from app.api import setup as setup_api
 from app.api import wifi as wifi_module
 from app.core.crypto import encrypt_secret
+from app.models.connection import ConnectionTechnology
 from app.models.user import UserRole
 
 
@@ -106,3 +109,79 @@ def test_create_first_admin_rejects_weak_password(monkeypatch):
         setup_api.create_first_admin(payload, db=FakeDb())
 
     assert exc.value.status_code == 422
+
+
+def test_wifi_create_request_requires_vlan():
+    with pytest.raises(ValidationError):
+        wifi_module.CreateWifiRequest(
+            root_id=uuid.uuid4(),
+            space_id=uuid.uuid4(),
+            ssid="Office",
+            password="Secret!12345",
+            security="WPA2",
+        )
+
+
+class FakeDeviceDb:
+    def __init__(self, devices_by_id=None):
+        self._devices_by_id = devices_by_id or {}
+
+    def get(self, _model, entity_id):
+        return self._devices_by_id.get(entity_id)
+
+
+def test_connection_receiver_is_required_for_zigbee():
+    with pytest.raises(HTTPException) as exc:
+        connections_module._validate_receiver(
+            object(),
+            uuid.uuid4(),
+            ConnectionTechnology.ZIGBEE,
+            None,
+        )
+
+    assert exc.value.status_code == 422
+    assert "Receiver is required" in str(exc.value.detail)
+
+
+def test_connection_receiver_requires_technology_capability():
+    root_id = uuid.uuid4()
+    receiver_id = uuid.uuid4()
+    receiver = SimpleNamespace(
+        id=receiver_id,
+        root_id=root_id,
+        is_receiver=True,
+        supports_zigbee=False,
+    )
+    db = FakeDeviceDb({receiver_id: receiver})
+
+    with pytest.raises(HTTPException) as exc:
+        connections_module._validate_receiver(
+            db,
+            root_id,
+            ConnectionTechnology.ZIGBEE,
+            receiver_id,
+        )
+
+    assert exc.value.status_code == 422
+    assert "does not support" in str(exc.value.detail)
+
+
+def test_connection_receiver_accepts_valid_receiver():
+    root_id = uuid.uuid4()
+    receiver_id = uuid.uuid4()
+    receiver = SimpleNamespace(
+        id=receiver_id,
+        root_id=root_id,
+        is_receiver=True,
+        supports_ble=True,
+    )
+    db = FakeDeviceDb({receiver_id: receiver})
+
+    validated = connections_module._validate_receiver(
+        db,
+        root_id,
+        ConnectionTechnology.BLE,
+        receiver_id,
+    )
+
+    assert validated == receiver_id

@@ -33,6 +33,7 @@ class GraphConnectionEdge(BaseModel):
     to_device_id: UUID
     from_interface_id: UUID
     to_interface_id: UUID
+    receiver_id: UUID | None
     technology: ConnectionTechnology
     vlan_id: UUID | None
     notes: str | None
@@ -86,6 +87,7 @@ def graph(
                 to_device_id=row[2],
                 from_interface_id=row[0].from_interface_id,
                 to_interface_id=row[0].to_interface_id,
+                receiver_id=row[0].receiver_id,
                 technology=row[0].technology,
                 vlan_id=row[0].vlan_id,
                 notes=row[0].notes,

@@ -6,6 +6,13 @@ import "./styles.css";
 const apiBase = (import.meta.env.VITE_API_URL || "http://localhost:8381/api").replace(/\/$/, "");
 const ACCESS_KEY = "hardware_registry_access_token";
 const REFRESH_KEY = "hardware_registry_refresh_token";
+const RECEIVER_REQUIRED_TECHNOLOGIES = new Set(["ZIGBEE", "MATTER_OVER_THREAD", "BLUETOOTH", "BLE"]);
+const RECEIVER_CAPABILITY_BY_TECHNOLOGY = {
+  ZIGBEE: "supports_zigbee",
+  MATTER_OVER_THREAD: "supports_matter_thread",
+  BLUETOOTH: "supports_bluetooth",
+  BLE: "supports_ble",
+};
 
 function parseApiError(fallback, payload) {
   if (!payload) {
@@ -353,6 +360,13 @@ function ExplorerScreen({ me, accessToken, onLogout }) {
     model: "",
     serial: "",
     notes: "",
+    isReceiver: false,
+    supportsWifi: false,
+    supportsEthernet: false,
+    supportsZigbee: false,
+    supportsMatterThread: false,
+    supportsBluetooth: false,
+    supportsBle: false,
   });
   const [interfaceSubmitting, setInterfaceSubmitting] = useState(false);
   const [newInterface, setNewInterface] = useState({ name: "", type: "", mac: "", notes: "" });
@@ -368,6 +382,7 @@ function ExplorerScreen({ me, accessToken, onLogout }) {
     fromInterfaceId: "",
     toDeviceId: "",
     toInterfaceId: "",
+    receiverId: "",
     technology: "ETHERNET",
     vlanId: "",
     notes: "",
@@ -799,6 +814,7 @@ function ExplorerScreen({ me, accessToken, onLogout }) {
       fromInterfaceId: "",
       toDeviceId: "",
       toInterfaceId: "",
+      receiverId: "",
       technology: "ETHERNET",
       vlanId: "",
       notes: "",
@@ -903,6 +919,29 @@ function ExplorerScreen({ me, accessToken, onLogout }) {
 
   const fromInterfaces = deviceInterfacesMap[newConnection.fromDeviceId] || [];
   const toInterfaces = deviceInterfacesMap[newConnection.toDeviceId] || [];
+  const requiredReceiverCapability = RECEIVER_CAPABILITY_BY_TECHNOLOGY[newConnection.technology];
+  const receiverRequiredForTechnology = RECEIVER_REQUIRED_TECHNOLOGIES.has(newConnection.technology);
+  const receiverCandidates = useMemo(() => {
+    return rootDevices.filter((device) => {
+      if (!device.is_receiver) {
+        return false;
+      }
+      if (!requiredReceiverCapability) {
+        return true;
+      }
+      return Boolean(device[requiredReceiverCapability]);
+    });
+  }, [rootDevices, requiredReceiverCapability]);
+
+  useEffect(() => {
+    if (!newConnection.receiverId) {
+      return;
+    }
+    if (receiverCandidates.some((device) => device.id === newConnection.receiverId)) {
+      return;
+    }
+    setNewConnection((prev) => ({ ...prev, receiverId: "" }));
+  }, [newConnection.receiverId, receiverCandidates]);
 
   const deviceNameById = useMemo(() => {
     const map = new Map();
@@ -1112,6 +1151,10 @@ function ExplorerScreen({ me, accessToken, onLogout }) {
       setWifiError("Wybierz przestrzeń dla sieci Wi-Fi");
       return;
     }
+    if (!newWifi.vlanId) {
+      setWifiError("Wybierz VLAN dla sieci Wi-Fi");
+      return;
+    }
 
     setWifiSubmitting(true);
     setWifiError("");
@@ -1128,7 +1171,7 @@ function ExplorerScreen({ me, accessToken, onLogout }) {
           ssid: newWifi.ssid,
           password: newWifi.password,
           security: newWifi.security,
-          vlan_id: newWifi.vlanId || null,
+          vlan_id: newWifi.vlanId,
           notes: newWifi.notes || null,
         }),
       });
@@ -1221,6 +1264,13 @@ function ExplorerScreen({ me, accessToken, onLogout }) {
           model: newDevice.model || null,
           serial: newDevice.serial || null,
           notes: newDevice.notes || null,
+          is_receiver: newDevice.isReceiver,
+          supports_wifi: newDevice.supportsWifi,
+          supports_ethernet: newDevice.supportsEthernet,
+          supports_zigbee: newDevice.supportsZigbee,
+          supports_matter_thread: newDevice.supportsMatterThread,
+          supports_bluetooth: newDevice.supportsBluetooth,
+          supports_ble: newDevice.supportsBle,
         }),
       });
       if (!response.ok) {
@@ -1229,7 +1279,21 @@ function ExplorerScreen({ me, accessToken, onLogout }) {
 
       setShowDeviceWizard(false);
       setDeviceWizardStep(1);
-      setNewDevice({ name: "", type: "", vendor: "", model: "", serial: "", notes: "" });
+      setNewDevice({
+        name: "",
+        type: "",
+        vendor: "",
+        model: "",
+        serial: "",
+        notes: "",
+        isReceiver: false,
+        supportsWifi: false,
+        supportsEthernet: false,
+        supportsZigbee: false,
+        supportsMatterThread: false,
+        supportsBluetooth: false,
+        supportsBle: false,
+      });
       await loadDevices(selectedRootId, currentLocationId);
       if (payload?.id) {
         setSelectedDeviceId(payload.id);
@@ -1286,8 +1350,14 @@ function ExplorerScreen({ me, accessToken, onLogout }) {
       return;
     }
 
+    const requiresReceiver = RECEIVER_REQUIRED_TECHNOLOGIES.has(newConnection.technology);
+
     if (!newConnection.fromInterfaceId || !newConnection.toInterfaceId) {
       setConnectionsError("Wybierz oba interfejsy połączenia");
+      return;
+    }
+    if (requiresReceiver && !newConnection.receiverId) {
+      setConnectionsError("Dla wybranej technologii wymagany jest odbiornik/koordynator");
       return;
     }
 
@@ -1298,6 +1368,7 @@ function ExplorerScreen({ me, accessToken, onLogout }) {
         root_id: selectedRootId,
         from_interface_id: newConnection.fromInterfaceId,
         to_interface_id: newConnection.toInterfaceId,
+        receiver_id: requiresReceiver ? newConnection.receiverId : null,
         technology: newConnection.technology,
         vlan_id: newConnection.technology === "ETHERNET" ? newConnection.vlanId || null : null,
         notes: newConnection.notes || null,
@@ -1321,6 +1392,7 @@ function ExplorerScreen({ me, accessToken, onLogout }) {
         fromInterfaceId: "",
         toDeviceId: "",
         toInterfaceId: "",
+        receiverId: "",
         technology: "ETHERNET",
         vlanId: "",
         notes: "",
@@ -1623,13 +1695,14 @@ function ExplorerScreen({ me, accessToken, onLogout }) {
                   ))}
                 </select>
 
-                <label htmlFor="wifi-vlan">VLAN (opcjonalnie)</label>
+                <label htmlFor="wifi-vlan">VLAN</label>
                 <select
                   id="wifi-vlan"
                   value={newWifi.vlanId}
                   onChange={(event) => setNewWifi((prev) => ({ ...prev, vlanId: event.target.value }))}
+                  required
                 >
-                  <option value="">Brak</option>
+                  <option value="">Wybierz VLAN</option>
                   {vlans.map((vlan) => (
                     <option key={vlan.id} value={vlan.id}>
                       VLAN {vlan.vlan_id} - {vlan.name}
@@ -1693,6 +1766,7 @@ function ExplorerScreen({ me, accessToken, onLogout }) {
                   >
                     <strong>{device.name}</strong>
                     <span className="muted">{device.type}</span>
+                    {device.is_receiver ? <span className="muted">odbiornik/koordynator</span> : null}
                   </button>
                 ))}
               </div>
@@ -1752,6 +1826,100 @@ function ExplorerScreen({ me, accessToken, onLogout }) {
                       value={newDevice.notes}
                       onChange={(event) => setNewDevice((prev) => ({ ...prev, notes: event.target.value }))}
                     />
+                    <label htmlFor="device-is-receiver" className="checkbox-row">
+                      <input
+                        id="device-is-receiver"
+                        type="checkbox"
+                        checked={newDevice.isReceiver}
+                        onChange={(event) =>
+                          setNewDevice((prev) => ({
+                            ...prev,
+                            isReceiver: event.target.checked,
+                            supportsWifi: event.target.checked ? prev.supportsWifi : false,
+                            supportsEthernet: event.target.checked ? prev.supportsEthernet : false,
+                            supportsZigbee: event.target.checked ? prev.supportsZigbee : false,
+                            supportsMatterThread: event.target.checked ? prev.supportsMatterThread : false,
+                            supportsBluetooth: event.target.checked ? prev.supportsBluetooth : false,
+                            supportsBle: event.target.checked ? prev.supportsBle : false,
+                          }))
+                        }
+                      />
+                      To urządzenie jest odbiornikiem / koordynatorem
+                    </label>
+                    <div className="checkbox-grid">
+                      <label htmlFor="device-cap-wifi" className="checkbox-row">
+                        <input
+                          id="device-cap-wifi"
+                          type="checkbox"
+                          checked={newDevice.supportsWifi}
+                          disabled={!newDevice.isReceiver}
+                          onChange={(event) =>
+                            setNewDevice((prev) => ({ ...prev, supportsWifi: event.target.checked }))
+                          }
+                        />
+                        Wi-Fi
+                      </label>
+                      <label htmlFor="device-cap-ethernet" className="checkbox-row">
+                        <input
+                          id="device-cap-ethernet"
+                          type="checkbox"
+                          checked={newDevice.supportsEthernet}
+                          disabled={!newDevice.isReceiver}
+                          onChange={(event) =>
+                            setNewDevice((prev) => ({ ...prev, supportsEthernet: event.target.checked }))
+                          }
+                        />
+                        Ethernet
+                      </label>
+                      <label htmlFor="device-cap-zigbee" className="checkbox-row">
+                        <input
+                          id="device-cap-zigbee"
+                          type="checkbox"
+                          checked={newDevice.supportsZigbee}
+                          disabled={!newDevice.isReceiver}
+                          onChange={(event) =>
+                            setNewDevice((prev) => ({ ...prev, supportsZigbee: event.target.checked }))
+                          }
+                        />
+                        Zigbee (koordynator)
+                      </label>
+                      <label htmlFor="device-cap-matter" className="checkbox-row">
+                        <input
+                          id="device-cap-matter"
+                          type="checkbox"
+                          checked={newDevice.supportsMatterThread}
+                          disabled={!newDevice.isReceiver}
+                          onChange={(event) =>
+                            setNewDevice((prev) => ({ ...prev, supportsMatterThread: event.target.checked }))
+                          }
+                        />
+                        Matter over Thread
+                      </label>
+                      <label htmlFor="device-cap-bluetooth" className="checkbox-row">
+                        <input
+                          id="device-cap-bluetooth"
+                          type="checkbox"
+                          checked={newDevice.supportsBluetooth}
+                          disabled={!newDevice.isReceiver}
+                          onChange={(event) =>
+                            setNewDevice((prev) => ({ ...prev, supportsBluetooth: event.target.checked }))
+                          }
+                        />
+                        Bluetooth
+                      </label>
+                      <label htmlFor="device-cap-ble" className="checkbox-row">
+                        <input
+                          id="device-cap-ble"
+                          type="checkbox"
+                          checked={newDevice.supportsBle}
+                          disabled={!newDevice.isReceiver}
+                          onChange={(event) =>
+                            setNewDevice((prev) => ({ ...prev, supportsBle: event.target.checked }))
+                          }
+                        />
+                        BLE
+                      </label>
+                    </div>
                     <div className="wizard-actions">
                       <button type="button" className="button-secondary" onClick={() => setDeviceWizardStep(1)}>
                         Wstecz
@@ -1844,13 +2012,15 @@ function ExplorerScreen({ me, accessToken, onLogout }) {
                 <select
                   id="conn-tech"
                   value={newConnection.technology}
-                  onChange={(event) =>
+                  onChange={(event) => {
+                    const technology = event.target.value;
                     setNewConnection((prev) => ({
                       ...prev,
-                      technology: event.target.value,
-                      vlanId: event.target.value === "ETHERNET" ? prev.vlanId : "",
-                    }))
-                  }
+                      technology,
+                      vlanId: technology === "ETHERNET" ? prev.vlanId : "",
+                      receiverId: RECEIVER_REQUIRED_TECHNOLOGIES.has(technology) ? prev.receiverId : "",
+                    }));
+                  }}
                 >
                   <option value="ETHERNET">ETHERNET</option>
                   <option value="FIBER">FIBER</option>
@@ -1879,6 +2049,31 @@ function ExplorerScreen({ me, accessToken, onLogout }) {
                         </option>
                       ))}
                     </select>
+                  </>
+                ) : null}
+
+                {receiverRequiredForTechnology ? (
+                  <>
+                    <label htmlFor="conn-receiver">Odbiornik / koordynator</label>
+                    <select
+                      id="conn-receiver"
+                      value={newConnection.receiverId}
+                      onChange={(event) => setNewConnection((prev) => ({ ...prev, receiverId: event.target.value }))}
+                      required
+                    >
+                      <option value="">Wybierz odbiornik</option>
+                      {receiverCandidates.map((device) => (
+                        <option key={device.id} value={device.id}>
+                          {device.name}
+                        </option>
+                      ))}
+                    </select>
+                    {receiverCandidates.length === 0 ? (
+                      <p className="warning">
+                        Brak odbiornika z wymaganą technologią. Dodaj urządzenie odbiorcze i zaznacz odpowiedni checkbox
+                        capability.
+                      </p>
+                    ) : null}
                   </>
                 ) : null}
 
@@ -1917,6 +2112,21 @@ function ExplorerScreen({ me, accessToken, onLogout }) {
                       <p>
                         <strong>Serial:</strong> {deviceDetail.serial || "-"}
                       </p>
+                      <p>
+                        <strong>Odbiornik:</strong>{" "}
+                        {deviceDetail.is_receiver
+                          ? [
+                              deviceDetail.supports_wifi ? "Wi-Fi" : null,
+                              deviceDetail.supports_ethernet ? "Ethernet" : null,
+                              deviceDetail.supports_zigbee ? "Zigbee" : null,
+                              deviceDetail.supports_matter_thread ? "Matter/Thread" : null,
+                              deviceDetail.supports_bluetooth ? "Bluetooth" : null,
+                              deviceDetail.supports_ble ? "BLE" : null,
+                            ]
+                              .filter(Boolean)
+                              .join(", ") || "tak"
+                          : "nie"}
+                      </p>
                     </div>
                     <h4>Interfejsy</h4>
                     {deviceDetail.interfaces.length === 0 ? <p>Brak interfejsów.</p> : null}
@@ -1941,12 +2151,16 @@ function ExplorerScreen({ me, accessToken, onLogout }) {
                           const peerDeviceId = outgoing ? connection.to_device_id : connection.from_device_id;
                           const fromName = interfaceNameById.get(connection.from_interface_id) || connection.from_interface_id;
                           const toName = interfaceNameById.get(connection.to_interface_id) || connection.to_interface_id;
+                          const receiverName = connection.receiver_id
+                            ? deviceNameById.get(connection.receiver_id) || connection.receiver_id
+                            : null;
                           return (
                             <li key={connection.id}>
                               <strong>{outgoing ? "OUT" : "IN"}</strong> [{connection.technology}] {fromName}
                               {" -> "}
                               {toName}
                               <span className="muted"> ({deviceNameById.get(peerDeviceId) || peerDeviceId})</span>
+                              {receiverName ? <span className="muted"> [receiver: {receiverName}]</span> : null}
                             </li>
                           );
                         })}

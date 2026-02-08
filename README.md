@@ -28,7 +28,7 @@ curl -I http://localhost:8380
 
 ## Uruchomienie produkcyjne (Traefik)
 
-Konfiguracja dla domen `sprzet.sh.info.pl` i `www.sprzet.sh.info.pl` jest przygotowana w szablonach:
+Konfiguracja Traefik (host + `www` z tej samej domeny) jest przygotowana w szablonach:
 
 - `.env.prod.example`
 - `compose.prod.example.yml`
@@ -44,6 +44,12 @@ Start:
 
 ```bash
 docker compose -f compose.prod.yml --env-file .env.prod up -d --build
+```
+
+W `.env.prod` ustaw:
+
+```bash
+TRAEFIK_DOMAIN=twoja-domena.tld
 ```
 
 Szczegóły Traefik: `deploy/traefik.md`.

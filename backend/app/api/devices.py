@@ -16,6 +16,15 @@ from app.models.user import User
 
 router = APIRouter(prefix="/devices", tags=["devices"])
 
+RECEIVER_CAPABILITY_FIELDS = (
+    "supports_wifi",
+    "supports_ethernet",
+    "supports_zigbee",
+    "supports_matter_thread",
+    "supports_bluetooth",
+    "supports_ble",
+)
+
 
 class InterfaceResponse(BaseModel):
     id: UUID
@@ -37,6 +46,13 @@ class DeviceSummaryResponse(BaseModel):
     model: str | None
     serial: str | None
     notes: str | None
+    is_receiver: bool
+    supports_wifi: bool
+    supports_ethernet: bool
+    supports_zigbee: bool
+    supports_matter_thread: bool
+    supports_bluetooth: bool
+    supports_ble: bool
     created_at: datetime
 
 
@@ -55,6 +71,13 @@ class CreateDeviceRequest(BaseModel):
     model: str | None = Field(default=None, max_length=100)
     serial: str | None = Field(default=None, max_length=255)
     notes: str | None = None
+    is_receiver: bool = False
+    supports_wifi: bool = False
+    supports_ethernet: bool = False
+    supports_zigbee: bool = False
+    supports_matter_thread: bool = False
+    supports_bluetooth: bool = False
+    supports_ble: bool = False
 
 
 class UpdateDeviceRequest(BaseModel):
@@ -67,6 +90,13 @@ class UpdateDeviceRequest(BaseModel):
     model: str | None = Field(default=None, max_length=100)
     serial: str | None = Field(default=None, max_length=255)
     notes: str | None = None
+    is_receiver: bool | None = None
+    supports_wifi: bool | None = None
+    supports_ethernet: bool | None = None
+    supports_zigbee: bool | None = None
+    supports_matter_thread: bool | None = None
+    supports_bluetooth: bool | None = None
+    supports_ble: bool | None = None
 
 
 class CreateInterfaceRequest(BaseModel):
@@ -89,6 +119,13 @@ def _device_to_summary(device: Device) -> DeviceSummaryResponse:
         model=device.model,
         serial=device.serial,
         notes=device.notes,
+        is_receiver=device.is_receiver,
+        supports_wifi=device.supports_wifi,
+        supports_ethernet=device.supports_ethernet,
+        supports_zigbee=device.supports_zigbee,
+        supports_matter_thread=device.supports_matter_thread,
+        supports_bluetooth=device.supports_bluetooth,
+        supports_ble=device.supports_ble,
         created_at=device.created_at,
     )
 
@@ -111,6 +148,21 @@ def _validate_space(db: Session, root_id: UUID, space_id: UUID) -> None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Space not found")
     if space.root_id != root_id:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Space must belong to the same root")
+
+
+def _collect_receiver_capabilities(source: object) -> dict[str, bool]:
+    return {field: bool(getattr(source, field)) for field in RECEIVER_CAPABILITY_FIELDS}
+
+
+def _normalize_receiver_payload(is_receiver: bool, capabilities: dict[str, bool]) -> tuple[bool, dict[str, bool]]:
+    if not is_receiver and any(capabilities.values()):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Receiver capabilities can be set only when is_receiver=true",
+        )
+    if not is_receiver:
+        return False, {field: False for field in RECEIVER_CAPABILITY_FIELDS}
+    return True, capabilities
 
 
 @router.get("", response_model=list[DeviceSummaryResponse])
@@ -140,6 +192,10 @@ def create_device(
 ) -> DeviceSummaryResponse:
     ensure_root_exists(db, payload.root_id)
     _validate_space(db, payload.root_id, payload.space_id)
+    normalized_receiver, normalized_capabilities = _normalize_receiver_payload(
+        payload.is_receiver,
+        _collect_receiver_capabilities(payload),
+    )
 
     device = Device(
         root_id=payload.root_id,
@@ -150,6 +206,13 @@ def create_device(
         model=payload.model,
         serial=payload.serial,
         notes=payload.notes,
+        is_receiver=normalized_receiver,
+        supports_wifi=normalized_capabilities["supports_wifi"],
+        supports_ethernet=normalized_capabilities["supports_ethernet"],
+        supports_zigbee=normalized_capabilities["supports_zigbee"],
+        supports_matter_thread=normalized_capabilities["supports_matter_thread"],
+        supports_bluetooth=normalized_capabilities["supports_bluetooth"],
+        supports_ble=normalized_capabilities["supports_ble"],
     )
     db.add(device)
     db.commit()
@@ -203,6 +266,25 @@ def update_device(
         device.serial = payload.serial
     if "notes" in payload.model_fields_set:
         device.notes = payload.notes
+
+    current_is_receiver = device.is_receiver
+    next_is_receiver = current_is_receiver
+    if "is_receiver" in payload.model_fields_set:
+        next_is_receiver = bool(payload.is_receiver)
+
+    next_capabilities = _collect_receiver_capabilities(device)
+    for field in RECEIVER_CAPABILITY_FIELDS:
+        if field in payload.model_fields_set:
+            next_capabilities[field] = bool(getattr(payload, field))
+
+    normalized_receiver, normalized_capabilities = _normalize_receiver_payload(next_is_receiver, next_capabilities)
+    device.is_receiver = normalized_receiver
+    device.supports_wifi = normalized_capabilities["supports_wifi"]
+    device.supports_ethernet = normalized_capabilities["supports_ethernet"]
+    device.supports_zigbee = normalized_capabilities["supports_zigbee"]
+    device.supports_matter_thread = normalized_capabilities["supports_matter_thread"]
+    device.supports_bluetooth = normalized_capabilities["supports_bluetooth"]
+    device.supports_ble = normalized_capabilities["supports_ble"]
 
     db.add(device)
     db.commit()

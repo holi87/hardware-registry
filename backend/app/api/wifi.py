@@ -37,7 +37,7 @@ class CreateWifiRequest(BaseModel):
     ssid: str = Field(min_length=1, max_length=255)
     password: str = Field(min_length=1, max_length=4096)
     security: str = Field(min_length=1, max_length=100)
-    vlan_id: UUID | None = None
+    vlan_id: UUID
     notes: str | None = None
 
 
@@ -53,9 +53,7 @@ def _validate_space(db: Session, root_id: UUID, space_id: UUID) -> None:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Space must belong to the same root")
 
 
-def _validate_vlan(db: Session, root_id: UUID, vlan_id: UUID | None) -> None:
-    if vlan_id is None:
-        return
+def _validate_vlan(db: Session, root_id: UUID, vlan_id: UUID) -> None:
     vlan = db.get(Vlan, vlan_id)
     if vlan is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="VLAN not found")

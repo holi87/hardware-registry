@@ -36,6 +36,7 @@ W sekcji Wi-Fi możesz:
 - filtrować sieci po przestrzeni
 - dodać sieć Wi-Fi (ADMIN)
 - odsłonić hasło przyciskiem „Pokaż hasło”
+- przypisać VLAN (wymagany)
 
 Zasady haseł Wi-Fi:
 
@@ -47,8 +48,9 @@ Zasady haseł Wi-Fi:
 
 1. Wybierz przestrzeń.
 2. Dodaj urządzenie przez wizard (ADMIN).
-3. Otwórz szczegóły urządzenia.
-4. Dodaj interfejsy (ADMIN).
+3. Jeśli urządzenie pełni rolę odbiornika/koordynatora, zaznacz to i wybierz technologie (checkboxy).
+4. Otwórz szczegóły urządzenia.
+5. Dodaj interfejsy (ADMIN).
 
 ## 7. Połączenia
 
@@ -71,6 +73,13 @@ Obsługiwane technologie:
 - OTHER
 
 Dla `ETHERNET` wymagany jest VLAN.
+
+Dla technologii bezprzewodowych wymagających bramki odbiorczej trzeba wskazać odbiornik/koordynator:
+
+- `ZIGBEE` -> odbiornik z capability `supports_zigbee`
+- `MATTER_OVER_THREAD` -> odbiornik z capability `supports_matter_thread`
+- `BLUETOOTH` -> odbiornik z capability `supports_bluetooth`
+- `BLE` -> odbiornik z capability `supports_ble`
 
 ## 8. Graf topologii
 

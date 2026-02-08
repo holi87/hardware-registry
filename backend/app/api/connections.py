@@ -17,6 +17,13 @@ from app.models.vlan import Vlan
 
 router = APIRouter(prefix="/connections", tags=["connections"])
 
+TECHNOLOGY_RECEIVER_CAPABILITY = {
+    ConnectionTechnology.ZIGBEE: "supports_zigbee",
+    ConnectionTechnology.MATTER_OVER_THREAD: "supports_matter_thread",
+    ConnectionTechnology.BLUETOOTH: "supports_bluetooth",
+    ConnectionTechnology.BLE: "supports_ble",
+}
+
 
 class ConnectionResponse(BaseModel):
     id: UUID
@@ -25,6 +32,7 @@ class ConnectionResponse(BaseModel):
     to_interface_id: UUID
     from_device_id: UUID
     to_device_id: UUID
+    receiver_id: UUID | None
     technology: ConnectionTechnology
     vlan_id: UUID | None
     notes: str | None
@@ -37,6 +45,7 @@ class CreateConnectionRequest(BaseModel):
     root_id: UUID
     from_interface_id: UUID
     to_interface_id: UUID
+    receiver_id: UUID | None = None
     technology: ConnectionTechnology
     vlan_id: UUID | None = None
     notes: str | None = None
@@ -62,6 +71,34 @@ def _validate_vlan(db: Session, root_id: UUID, vlan_id: UUID | None) -> None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="VLAN not found")
     if vlan.root_id != root_id:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="VLAN must belong to the same root")
+
+
+def _validate_receiver(db: Session, root_id: UUID, technology: ConnectionTechnology, receiver_id: UUID | None) -> UUID | None:
+    required_capability = TECHNOLOGY_RECEIVER_CAPABILITY.get(technology)
+    if required_capability is None and receiver_id is None:
+        return None
+
+    if receiver_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Receiver is required for {technology.value}",
+        )
+
+    receiver = db.get(Device, receiver_id)
+    if receiver is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Receiver device not found")
+    if receiver.root_id != root_id:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Receiver must belong to the same root")
+    if not receiver.is_receiver:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Selected device is not a receiver")
+
+    if required_capability and not bool(getattr(receiver, required_capability)):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Receiver does not support {technology.value}",
+        )
+
+    return receiver.id
 
 
 @router.post("", response_model=ConnectionResponse, status_code=status.HTTP_201_CREATED)
@@ -93,11 +130,13 @@ def create_connection(
         )
 
     _validate_vlan(db, payload.root_id, payload.vlan_id)
+    validated_receiver_id = _validate_receiver(db, payload.root_id, payload.technology, payload.receiver_id)
 
     connection = Connection(
         root_id=payload.root_id,
         from_interface_id=from_interface.id,
         to_interface_id=to_interface.id,
+        receiver_id=validated_receiver_id,
         technology=payload.technology,
         vlan_id=payload.vlan_id,
         notes=payload.notes,
@@ -113,6 +152,7 @@ def create_connection(
         to_interface_id=connection.to_interface_id,
         from_device_id=from_device.id,
         to_device_id=to_device.id,
+        receiver_id=connection.receiver_id,
         technology=connection.technology,
         vlan_id=connection.vlan_id,
         notes=connection.notes,
@@ -152,6 +192,7 @@ def list_connections(
             to_interface_id=row[0].to_interface_id,
             from_device_id=row[1],
             to_device_id=row[2],
+            receiver_id=row[0].receiver_id,
             technology=row[0].technology,
             vlan_id=row[0].vlan_id,
             notes=row[0].notes,

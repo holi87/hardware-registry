@@ -56,6 +56,25 @@ form {
   gap: 0.55rem;
 }
 
+.checkbox-grid {
+  display: grid;
+  gap: 0.45rem;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+.checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-weight: 600;
+}
+
+.checkbox-row input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+}
+
 label {
   font-weight: 600;
 }

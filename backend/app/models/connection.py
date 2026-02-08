@@ -40,6 +40,12 @@ class Connection(Base):
         ForeignKey("interfaces.id", ondelete="CASCADE"),
         nullable=False,
     )
+    receiver_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("devices.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     technology: Mapped[ConnectionTechnology] = mapped_column(
         Enum(ConnectionTechnology, name="connection_technology"),
         nullable=False,
