@@ -63,8 +63,7 @@ function SetupAdminScreen({ onSetupDone }) {
   };
 
   return (
-    <>
-      <section className="panel">
+    <section className="panel">
       <h2>Utwórz admina</h2>
       <p>Pierwsze uruchomienie systemu. Skonfiguruj konto administratora.</p>
       <form onSubmit={onSubmit}>
@@ -93,63 +92,7 @@ function SetupAdminScreen({ onSetupDone }) {
         </button>
       </form>
       {error ? <p className="error">{error}</p> : null}
-      </section>
-
-      {isAdmin ? (
-        <div className="fab-wrap">
-          {fabOpen ? (
-            <div className="fab-menu">
-              <button
-                type="button"
-                onClick={() => {
-                  setShowDeviceWizard(true);
-                  setShowConnectionWizard(false);
-                  setDeviceWizardStep(1);
-                  setFabOpen(false);
-                }}
-              >
-                + Urządzenie
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setShowConnectionWizard(true);
-                  setShowDeviceWizard(false);
-                  setFabOpen(false);
-                }}
-              >
-                + Połączenie
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  pushToast("Użyj sekcji Secrets w szczegółach urządzenia");
-                  setFabOpen(false);
-                }}
-              >
-                + Sekret
-              </button>
-            </div>
-          ) : null}
-          <button
-            type="button"
-            className="fab-toggle"
-            onClick={() => setFabOpen((prev) => !prev)}
-            aria-label="Szybkie akcje"
-          >
-            +
-          </button>
-        </div>
-      ) : null}
-
-      <div className="toast-stack" aria-live="polite">
-        {toasts.map((toast) => (
-          <div key={toast.id} className={`toast ${toast.type}`}>
-            {toast.message}
-          </div>
-        ))}
-      </div>
-    </>
+    </section>
   );
 }
 
