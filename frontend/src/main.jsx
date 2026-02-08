@@ -6,12 +6,27 @@ const apiBase = (import.meta.env.VITE_API_URL || "http://localhost:8381/api").re
 const ACCESS_KEY = "hardware_registry_access_token";
 const REFRESH_KEY = "hardware_registry_refresh_token";
 
+function parseApiError(fallback, payload) {
+  if (!payload) {
+    return fallback;
+  }
+  if (typeof payload.detail === "string") {
+    return payload.detail;
+  }
+  return fallback;
+}
+
+async function request(path, options = {}) {
+  const response = await fetch(`${apiBase}${path}`, options);
+  const payload = await response.json().catch(() => null);
+  return { response, payload };
+}
+
 function SetupAdminScreen({ onSetupDone }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const [info, setInfo] = useState("");
 
   const canSubmit = useMemo(() => email.trim().length > 3 && password.length > 0, [email, password]);
 
@@ -19,23 +34,19 @@ function SetupAdminScreen({ onSetupDone }) {
     event.preventDefault();
     setLoading(true);
     setError("");
-    setInfo("");
 
     try {
-      const response = await fetch(`${apiBase}/setup/admin`, {
+      const { response, payload } = await request("/setup/admin", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email, password }),
       });
 
-      const data = await response.json().catch(() => ({}));
       if (!response.ok) {
-        throw new Error(data.detail || "Nie udało się utworzyć konta admina");
+        throw new Error(parseApiError("Nie udało się utworzyć konta admina", payload));
       }
 
-      setInfo("Admin utworzony. Możesz się zalogować.");
-      setPassword("");
-      setTimeout(onSetupDone, 400);
+      onSetupDone();
     } catch (err) {
       setError(err.message || "Błąd podczas inicjalizacji");
     } finally {
@@ -44,7 +55,7 @@ function SetupAdminScreen({ onSetupDone }) {
   };
 
   return (
-    <section>
+    <section className="panel">
       <h2>Utwórz admina</h2>
       <p>Pierwsze uruchomienie systemu. Skonfiguruj konto administratora.</p>
       <form onSubmit={onSubmit}>
@@ -73,7 +84,6 @@ function SetupAdminScreen({ onSetupDone }) {
         </button>
       </form>
       {error ? <p className="error">{error}</p> : null}
-      {info ? <p className="info">{info}</p> : null}
     </section>
   );
 }
@@ -92,18 +102,18 @@ function LoginScreen({ onLoggedIn }) {
     setError("");
 
     try {
-      const response = await fetch(`${apiBase}/auth/login`, {
+      const { response, payload } = await request("/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email, password }),
       });
-      const data = await response.json().catch(() => ({}));
+
       if (!response.ok) {
-        throw new Error(data.detail || "Błędny login lub hasło");
+        throw new Error(parseApiError("Błędny login lub hasło", payload));
       }
 
-      localStorage.setItem(ACCESS_KEY, data.access_token);
-      localStorage.setItem(REFRESH_KEY, data.refresh_token);
+      localStorage.setItem(ACCESS_KEY, payload.access_token);
+      localStorage.setItem(REFRESH_KEY, payload.refresh_token);
       onLoggedIn();
     } catch (err) {
       setError(err.message || "Błąd logowania");
@@ -113,7 +123,7 @@ function LoginScreen({ onLoggedIn }) {
   };
 
   return (
-    <section>
+    <section className="panel">
       <h2>Logowanie</h2>
       <form onSubmit={onSubmit}>
         <label htmlFor="login-email">Email</label>
@@ -171,7 +181,7 @@ function ChangePasswordScreen({ me, onChanged }) {
         throw new Error("Brak sesji użytkownika");
       }
 
-      const response = await fetch(`${apiBase}/auth/change-password`, {
+      const { response, payload } = await request("/auth/change-password", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -180,9 +190,8 @@ function ChangePasswordScreen({ me, onChanged }) {
         body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
       });
 
-      const data = await response.json().catch(() => ({}));
       if (!response.ok) {
-        throw new Error(data.detail || "Nie udało się zmienić hasła");
+        throw new Error(parseApiError("Nie udało się zmienić hasła", payload));
       }
 
       setCurrentPassword("");
@@ -198,7 +207,7 @@ function ChangePasswordScreen({ me, onChanged }) {
   };
 
   return (
-    <section>
+    <section className="panel">
       <h2>Wymagana zmiana hasła</h2>
       <p className="warning">
         Użytkownik <strong>{me.email}</strong> musi zmienić hasło jednorazowe przed dalszą pracą.
@@ -242,24 +251,250 @@ function ChangePasswordScreen({ me, onChanged }) {
   );
 }
 
-function MeCard({ me, onLogout }) {
+function ExplorerScreen({ me, accessToken, onLogout }) {
+  const [roots, setRoots] = useState([]);
+  const [selectedRootId, setSelectedRootId] = useState("");
+  const [tree, setTree] = useState(null);
+  const [currentLocationId, setCurrentLocationId] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  const loadRoots = async () => {
+    const { response, payload } = await request("/roots", {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+
+    if (response.status === 401) {
+      localStorage.removeItem(ACCESS_KEY);
+      localStorage.removeItem(REFRESH_KEY);
+      onLogout();
+      return [];
+    }
+
+    if (!response.ok) {
+      throw new Error(parseApiError("Nie udało się pobrać rootów", payload));
+    }
+
+    return payload || [];
+  };
+
+  const loadTree = async (rootId) => {
+    const { response, payload } = await request(`/locations/tree?root_id=${rootId}`, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+
+    if (!response.ok) {
+      throw new Error(parseApiError("Nie udało się pobrać drzewa lokalizacji", payload));
+    }
+
+    return payload;
+  };
+
+  useEffect(() => {
+    let mounted = true;
+
+    const bootstrap = async () => {
+      setLoading(true);
+      setError("");
+      try {
+        const rootsData = await loadRoots();
+        if (!mounted) {
+          return;
+        }
+        setRoots(rootsData);
+
+        if (rootsData.length === 0) {
+          setTree(null);
+          setSelectedRootId("");
+          setCurrentLocationId("");
+          return;
+        }
+
+        const firstRootId = selectedRootId && rootsData.some((r) => r.id === selectedRootId) ? selectedRootId : rootsData[0].id;
+        setSelectedRootId(firstRootId);
+        const treeData = await loadTree(firstRootId);
+        if (!mounted) {
+          return;
+        }
+        setTree(treeData);
+        setCurrentLocationId(firstRootId);
+      } catch (err) {
+        if (mounted) {
+          setError(err.message || "Błąd ładowania danych");
+        }
+      } finally {
+        if (mounted) {
+          setLoading(false);
+        }
+      }
+    };
+
+    bootstrap();
+
+    return () => {
+      mounted = false;
+    };
+  }, [accessToken]);
+
+  useEffect(() => {
+    if (!selectedRootId) {
+      return;
+    }
+
+    let mounted = true;
+    setError("");
+    setLoading(true);
+
+    loadTree(selectedRootId)
+      .then((treeData) => {
+        if (!mounted) {
+          return;
+        }
+        setTree(treeData);
+        setCurrentLocationId((prev) => {
+          if (!prev) {
+            return selectedRootId;
+          }
+          return prev;
+        });
+      })
+      .catch((err) => {
+        if (mounted) {
+          setError(err.message || "Błąd ładowania drzewa");
+          setTree(null);
+        }
+      })
+      .finally(() => {
+        if (mounted) {
+          setLoading(false);
+        }
+      });
+
+    return () => {
+      mounted = false;
+    };
+  }, [selectedRootId]);
+
+  const maps = useMemo(() => {
+    const byId = new Map();
+    const parentById = new Map();
+
+    const walk = (node, parentId = null) => {
+      if (!node) {
+        return;
+      }
+      byId.set(node.id, node);
+      parentById.set(node.id, parentId);
+      for (const child of node.children || []) {
+        walk(child, node.id);
+      }
+    };
+
+    walk(tree);
+    return { byId, parentById };
+  }, [tree]);
+
+  useEffect(() => {
+    if (!tree) {
+      return;
+    }
+    if (!maps.byId.has(currentLocationId)) {
+      setCurrentLocationId(tree.id);
+    }
+  }, [tree, currentLocationId, maps]);
+
+  const currentNode = maps.byId.get(currentLocationId) || tree;
+  const children = currentNode?.children || [];
+
+  const breadcrumb = useMemo(() => {
+    if (!currentNode) {
+      return [];
+    }
+    const list = [];
+    let pointer = currentNode.id;
+
+    while (pointer) {
+      const node = maps.byId.get(pointer);
+      if (!node) {
+        break;
+      }
+      list.push(node);
+      pointer = maps.parentById.get(pointer) || null;
+    }
+
+    return list.reverse();
+  }, [currentNode, maps]);
+
+  const onRootChange = (event) => {
+    const rootId = event.target.value;
+    setSelectedRootId(rootId);
+    setCurrentLocationId(rootId);
+  };
+
   return (
-    <section>
-      <h2>Zalogowano</h2>
-      <div className="card">
-        <p>
-          <strong>Email:</strong> {me.email}
-        </p>
-        <p>
-          <strong>Rola:</strong> {me.role}
-        </p>
-        <p>
-          <strong>Aktywne:</strong> {String(me.is_active)}
-        </p>
+    <section className="panel">
+      <div className="panel-header">
+        <div>
+          <h2>Eksplorator przestrzeni</h2>
+          <p className="muted">
+            {me.email} ({me.role})
+          </p>
+        </div>
+        <button type="button" className="button-secondary" onClick={onLogout}>
+          Wyloguj
+        </button>
       </div>
-      <button type="button" onClick={onLogout}>
-        Wyloguj
-      </button>
+
+      {roots.length > 1 ? (
+        <div className="field">
+          <label htmlFor="root-selector">Root</label>
+          <select id="root-selector" value={selectedRootId} onChange={onRootChange}>
+            {roots.map((root) => (
+              <option key={root.id} value={root.id}>
+                {root.name}
+              </option>
+            ))}
+          </select>
+        </div>
+      ) : null}
+
+      {loading ? <p>Ładowanie przestrzeni...</p> : null}
+      {error ? <p className="error">{error}</p> : null}
+      {!loading && !error && roots.length === 0 ? <p>Brak przypisanych rootów.</p> : null}
+
+      {!loading && !error && currentNode ? (
+        <>
+          <nav className="breadcrumb" aria-label="breadcrumb">
+            {breadcrumb.map((node, index) => (
+              <button
+                key={node.id}
+                type="button"
+                className={`crumb ${node.id === currentNode.id ? "is-active" : ""}`}
+                onClick={() => setCurrentLocationId(node.id)}
+                disabled={node.id === currentNode.id}
+              >
+                {node.name}
+                {index < breadcrumb.length - 1 ? " /" : ""}
+              </button>
+            ))}
+          </nav>
+
+          <header className="space-header">
+            <h3>{currentNode.name}</h3>
+            {currentNode.notes ? <p className="muted">{currentNode.notes}</p> : null}
+          </header>
+
+          <div className="tile-grid">
+            {children.length === 0 ? <p>Brak podprzestrzeni.</p> : null}
+            {children.map((child) => (
+              <button key={child.id} type="button" className="tile" onClick={() => setCurrentLocationId(child.id)}>
+                <span className="tile-title">{child.name}</span>
+                <span className="tile-meta">Urządzenia: {child.device_count ?? 0}</span>
+              </button>
+            ))}
+          </div>
+        </>
+      ) : null}
     </section>
   );
 }
@@ -277,7 +512,7 @@ function App() {
       return;
     }
 
-    const response = await fetch(`${apiBase}/auth/me`, {
+    const { response, payload } = await request("/auth/me", {
       headers: { Authorization: `Bearer ${accessToken}` },
     });
 
@@ -288,7 +523,6 @@ function App() {
       return;
     }
 
-    const payload = await response.json();
     setMe(payload);
   };
 
@@ -297,9 +531,12 @@ function App() {
     setError("");
 
     try {
-      const response = await fetch(`${apiBase}/setup/status`);
-      const data = await response.json();
-      const setupNeeded = Boolean(data.needs_setup);
+      const { response, payload } = await request("/setup/status");
+      if (!response.ok) {
+        throw new Error(parseApiError("Nie można pobrać statusu setup", payload));
+      }
+
+      const setupNeeded = Boolean(payload.needs_setup);
       setNeedsSetup(setupNeeded);
 
       if (!setupNeeded) {
@@ -326,8 +563,11 @@ function App() {
 
   return (
     <main className="app">
-      <h1>Hardware Registry</h1>
-      <p>API URL: {apiBase}</p>
+      <header className="app-header">
+        <h1>Hardware Registry</h1>
+        <p className="muted">API URL: {apiBase}</p>
+      </header>
+
       {loading ? <p>Sprawdzanie statusu...</p> : null}
       {error ? <p className="error">{error}</p> : null}
 
@@ -337,7 +577,7 @@ function App() {
         <ChangePasswordScreen me={me} onChanged={fetchMe} />
       ) : null}
       {!loading && !error && !needsSetup && me && !me.must_change_password ? (
-        <MeCard me={me} onLogout={handleLogout} />
+        <ExplorerScreen me={me} accessToken={localStorage.getItem(ACCESS_KEY)} onLogout={handleLogout} />
       ) : null}
     </main>
   );
