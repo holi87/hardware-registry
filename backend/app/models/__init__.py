@@ -2,6 +2,7 @@ from app.models.connection import Connection, ConnectionTechnology
 from app.models.device import Device
 from app.models.interface import Interface
 from app.models.location import Location
+from app.models.secret import Secret, SecretType
 from app.models.user import User, UserRole
 from app.models.user_root import UserRoot
 from app.models.vlan import Vlan
@@ -18,4 +19,6 @@ __all__ = [
     "Interface",
     "Connection",
     "ConnectionTechnology",
+    "Secret",
+    "SecretType",
 ]

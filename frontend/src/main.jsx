@@ -324,6 +324,17 @@ function ExplorerScreen({ me, accessToken, onLogout }) {
   const [graphSearch, setGraphSearch] = useState("");
   const graphContainerRef = useRef(null);
   const graphInstanceRef = useRef(null);
+  const [secrets, setSecrets] = useState([]);
+  const [secretsLoading, setSecretsLoading] = useState(false);
+  const [secretsError, setSecretsError] = useState("");
+  const [secretSubmitting, setSecretSubmitting] = useState(false);
+  const [revealedSecrets, setRevealedSecrets] = useState({});
+  const [newSecret, setNewSecret] = useState({
+    type: "PASSWORD",
+    name: "",
+    value: "",
+    notes: "",
+  });
 
   const isAdmin = me.role === "ADMIN";
 
@@ -549,6 +560,30 @@ function ExplorerScreen({ me, accessToken, onLogout }) {
     }
   };
 
+  const loadSecrets = async (rootId) => {
+    if (!rootId || !isAdmin) {
+      setSecrets([]);
+      return;
+    }
+
+    setSecretsLoading(true);
+    setSecretsError("");
+    try {
+      const { response, payload } = await request(`/secrets?root_id=${rootId}`, {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
+      if (!response.ok) {
+        throw new Error(parseApiError("Nie udało się pobrać sekretów", payload));
+      }
+      setSecrets(payload || []);
+    } catch (err) {
+      setSecrets([]);
+      setSecretsError(err.message || "Błąd pobierania sekretów");
+    } finally {
+      setSecretsLoading(false);
+    }
+  };
+
   useEffect(() => {
     let mounted = true;
 
@@ -662,6 +697,9 @@ function ExplorerScreen({ me, accessToken, onLogout }) {
     setDeviceInterfacesMap({});
     loadRootDevices(selectedRootId);
     loadGraph(selectedRootId);
+    loadSecrets(selectedRootId);
+    setRevealedSecrets({});
+    setNewSecret({ type: "PASSWORD", name: "", value: "", notes: "" });
     setGraphTechnologyFilter("all");
     setGraphSpaceFilter("all");
     setGraphTypeFilter("all");
@@ -846,6 +884,13 @@ function ExplorerScreen({ me, accessToken, onLogout }) {
     }));
     return [...nodes, ...edges];
   }, [filteredGraph]);
+
+  const deviceSecrets = useMemo(() => {
+    if (!selectedDeviceId) {
+      return [];
+    }
+    return secrets.filter((item) => item.linked_device_id === selectedDeviceId);
+  }, [secrets, selectedDeviceId]);
 
   useEffect(() => {
     if (!graphContainerRef.current) {
@@ -1214,6 +1259,58 @@ function ExplorerScreen({ me, accessToken, onLogout }) {
       },
       duration: 250,
     });
+  };
+
+  const onCreateSecret = async (event) => {
+    event.preventDefault();
+    if (!selectedRootId || !isAdmin) {
+      return;
+    }
+
+    setSecretSubmitting(true);
+    setSecretsError("");
+    try {
+      const { response, payload } = await request("/secrets", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify({
+          root_id: selectedRootId,
+          type: newSecret.type,
+          name: newSecret.name,
+          value: newSecret.value,
+          linked_device_id: selectedDeviceId || null,
+          notes: newSecret.notes || null,
+        }),
+      });
+      if (!response.ok) {
+        throw new Error(parseApiError("Nie udało się dodać sekretu", payload));
+      }
+      setNewSecret({ type: "PASSWORD", name: "", value: "", notes: "" });
+      await loadSecrets(selectedRootId);
+    } catch (err) {
+      setSecretsError(err.message || "Błąd dodawania sekretu");
+    } finally {
+      setSecretSubmitting(false);
+    }
+  };
+
+  const onRevealSecret = async (secretId) => {
+    setSecretsError("");
+    try {
+      const { response, payload } = await request(`/secrets/${secretId}/reveal`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
+      if (!response.ok) {
+        throw new Error(parseApiError("Nie udało się odsłonić sekretu", payload));
+      }
+      setRevealedSecrets((prev) => ({ ...prev, [secretId]: payload.value }));
+    } catch (err) {
+      setSecretsError(err.message || "Błąd reveal sekretu");
+    }
   };
 
   return (
@@ -1788,6 +1885,74 @@ function ExplorerScreen({ me, accessToken, onLogout }) {
                           {interfaceSubmitting ? "Dodawanie..." : "Dodaj interfejs"}
                         </button>
                       </form>
+                    ) : null}
+
+                    {isAdmin ? (
+                      <div className="inline-form">
+                        <h4>Secrets (ADMIN)</h4>
+                        {secretsLoading ? <p>Ładowanie sekretów...</p> : null}
+                        {secretsError ? <p className="error">{secretsError}</p> : null}
+                        {!secretsLoading && deviceSecrets.length === 0 ? (
+                          <p>Brak sekretów powiązanych z tym urządzeniem.</p>
+                        ) : null}
+                        {!secretsLoading && deviceSecrets.length > 0 ? (
+                          <ul className="simple-list">
+                            {deviceSecrets.map((secret) => (
+                              <li key={secret.id}>
+                                <strong>{secret.name}</strong> [{secret.type}]{" "}
+                                {revealedSecrets[secret.id] ? revealedSecrets[secret.id] : "••••••••••"}
+                                <button
+                                  type="button"
+                                  className="button-secondary"
+                                  onClick={() => onRevealSecret(secret.id)}
+                                  style={{ marginLeft: "0.6rem" }}
+                                >
+                                  Reveal
+                                </button>
+                              </li>
+                            ))}
+                          </ul>
+                        ) : null}
+
+                        <form onSubmit={onCreateSecret}>
+                          <h4>Dodaj sekret</h4>
+                          <label htmlFor="secret-type">Typ</label>
+                          <select
+                            id="secret-type"
+                            value={newSecret.type}
+                            onChange={(event) => setNewSecret((prev) => ({ ...prev, type: event.target.value }))}
+                          >
+                            <option value="PASSWORD">PASSWORD</option>
+                            <option value="TOKEN">TOKEN</option>
+                            <option value="API_KEY">API_KEY</option>
+                            <option value="OTHER">OTHER</option>
+                          </select>
+                          <label htmlFor="secret-name">Nazwa</label>
+                          <input
+                            id="secret-name"
+                            value={newSecret.name}
+                            onChange={(event) => setNewSecret((prev) => ({ ...prev, name: event.target.value }))}
+                            required
+                          />
+                          <label htmlFor="secret-value">Wartość</label>
+                          <input
+                            id="secret-value"
+                            type="password"
+                            value={newSecret.value}
+                            onChange={(event) => setNewSecret((prev) => ({ ...prev, value: event.target.value }))}
+                            required
+                          />
+                          <label htmlFor="secret-notes">Notatki</label>
+                          <input
+                            id="secret-notes"
+                            value={newSecret.notes}
+                            onChange={(event) => setNewSecret((prev) => ({ ...prev, notes: event.target.value }))}
+                          />
+                          <button type="submit" disabled={secretSubmitting}>
+                            {secretSubmitting ? "Zapisywanie..." : "Dodaj sekret"}
+                          </button>
+                        </form>
+                      </div>
                     ) : null}
                   </>
                 ) : null}

@@ -6,6 +6,7 @@ from app.api.connections import router as connections_router
 from app.api.devices import router as devices_router
 from app.api.graph import router as graph_router
 from app.api.locations import router as locations_router
+from app.api.secrets import router as secrets_router
 from app.api.setup import router as setup_router
 from app.api.system import router as system_router
 from app.api.vlans import router as vlans_router
@@ -22,3 +23,4 @@ router.include_router(wifi_router)
 router.include_router(devices_router)
 router.include_router(connections_router)
 router.include_router(graph_router)
+router.include_router(secrets_router)
