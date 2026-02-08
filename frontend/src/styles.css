@@ -11,8 +11,8 @@ body {
 }
 
 .app {
-  max-width: 720px;
-  margin: 4rem auto;
+  max-width: 760px;
+  margin: 3rem auto;
   padding: 2rem;
   background: #ffffff;
   border-radius: 12px;
@@ -21,4 +21,50 @@ body {
 
 h1 {
   margin-top: 0;
+}
+
+h2 {
+  margin-bottom: 0.5rem;
+}
+
+form {
+  display: grid;
+  gap: 0.6rem;
+  margin-top: 1rem;
+}
+
+label {
+  font-weight: 600;
+}
+
+input {
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  padding: 0.55rem 0.7rem;
+  font-size: 0.95rem;
+}
+
+button {
+  margin-top: 0.5rem;
+  border: none;
+  border-radius: 8px;
+  padding: 0.65rem 1rem;
+  background: #0f172a;
+  color: #ffffff;
+  cursor: pointer;
+}
+
+button:disabled {
+  background: #94a3b8;
+  cursor: not-allowed;
+}
+
+.error {
+  color: #b91c1c;
+  font-weight: 600;
+}
+
+.info {
+  color: #166534;
+  font-weight: 600;
 }
