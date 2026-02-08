@@ -12,6 +12,10 @@ class ConnectionTechnology(str, enum.Enum):
     ETHERNET = "ETHERNET"
     FIBER = "FIBER"
     WIFI = "WIFI"
+    ZIGBEE = "ZIGBEE"
+    MATTER_OVER_THREAD = "MATTER_OVER_THREAD"
+    BLUETOOTH = "BLUETOOTH"
+    BLE = "BLE"
     SERIAL = "SERIAL"
     OTHER = "OTHER"
 

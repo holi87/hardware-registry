@@ -2,8 +2,10 @@
 .env
 .env.*
 !.env.example
+!.env.prod.example
 compose.yml
 compose.override.yml
+compose.prod.yml
 
 # Secrets and local sensitive data
 .secrets/

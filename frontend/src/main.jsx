@@ -1855,6 +1855,10 @@ function ExplorerScreen({ me, accessToken, onLogout }) {
                   <option value="ETHERNET">ETHERNET</option>
                   <option value="FIBER">FIBER</option>
                   <option value="WIFI">WIFI</option>
+                  <option value="ZIGBEE">Zigbee</option>
+                  <option value="MATTER_OVER_THREAD">Matter over Thread</option>
+                  <option value="BLUETOOTH">Bluetooth</option>
+                  <option value="BLE">BLE</option>
                   <option value="SERIAL">SERIAL</option>
                   <option value="OTHER">OTHER</option>
                 </select>

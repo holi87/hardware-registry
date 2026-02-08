@@ -1,0 +1,72 @@
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  api:
+    build:
+      context: ./backend
+    restart: unless-stopped
+    environment:
+      APP_NAME: ${APP_NAME}
+      APP_ENV: ${APP_ENV}
+      API_LOG_LEVEL: ${API_LOG_LEVEL}
+      API_PORT: ${API_PORT}
+      DATABASE_URL: ${DATABASE_URL}
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_ACCESS_TOKEN_EXPIRE_MINUTES: ${JWT_ACCESS_TOKEN_EXPIRE_MINUTES}
+      JWT_REFRESH_TOKEN_EXPIRE_DAYS: ${JWT_REFRESH_TOKEN_EXPIRE_DAYS}
+      APP_ENCRYPTION_KEY: ${APP_ENCRYPTION_KEY}
+      ADMIN_RESET_KEY: ${ADMIN_RESET_KEY}
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import os, urllib.request; port=os.getenv('API_PORT','8080'); urllib.request.urlopen(f'http://127.0.0.1:{port}/api/health', timeout=2)",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  web:
+    build:
+      context: ./frontend
+      args:
+        VITE_API_URL: ${VITE_API_URL}
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=proxy
+      - traefik.http.routers.hardware-registry.rule=Host(`${TRAEFIK_DOMAIN}`)
+      - traefik.http.routers.hardware-registry.entrypoints=web
+      - traefik.http.services.hardware-registry.loadbalancer.server.port=8080
+    networks:
+      - default
+      - proxy
+
+volumes:
+  db_data:
+
+networks:
+  proxy:
+    external: true
+    name: proxy
