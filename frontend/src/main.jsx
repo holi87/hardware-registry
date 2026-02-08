@@ -258,6 +258,13 @@ function ExplorerScreen({ me, accessToken, onLogout }) {
   const [currentLocationId, setCurrentLocationId] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [vlans, setVlans] = useState([]);
+  const [vlansLoading, setVlansLoading] = useState(false);
+  const [vlansError, setVlansError] = useState("");
+  const [vlanSubmitting, setVlanSubmitting] = useState(false);
+  const [newVlan, setNewVlan] = useState({ vlanId: "", name: "", notes: "" });
+
+  const isAdmin = me.role === "ADMIN";
 
   const loadRoots = async () => {
     const { response, payload } = await request("/roots", {
@@ -288,6 +295,30 @@ function ExplorerScreen({ me, accessToken, onLogout }) {
     }
 
     return payload;
+  };
+
+  const loadVlans = async (rootId) => {
+    if (!rootId) {
+      setVlans([]);
+      return;
+    }
+
+    setVlansLoading(true);
+    setVlansError("");
+    try {
+      const { response, payload } = await request(`/vlans?root_id=${rootId}`, {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
+      if (!response.ok) {
+        throw new Error(parseApiError("Nie udało się pobrać listy VLAN", payload));
+      }
+      setVlans(payload || []);
+    } catch (err) {
+      setVlans([]);
+      setVlansError(err.message || "Błąd pobierania VLAN");
+    } finally {
+      setVlansLoading(false);
+    }
   };
 
   useEffect(() => {
@@ -375,6 +406,10 @@ function ExplorerScreen({ me, accessToken, onLogout }) {
     };
   }, [selectedRootId]);
 
+  useEffect(() => {
+    loadVlans(selectedRootId);
+  }, [selectedRootId, accessToken]);
+
   const maps = useMemo(() => {
     const byId = new Map();
     const parentById = new Map();
@@ -429,6 +464,48 @@ function ExplorerScreen({ me, accessToken, onLogout }) {
     const rootId = event.target.value;
     setSelectedRootId(rootId);
     setCurrentLocationId(rootId);
+  };
+
+  const onCreateVlan = async (event) => {
+    event.preventDefault();
+    if (!selectedRootId) {
+      return;
+    }
+
+    const parsedVlan = Number(newVlan.vlanId);
+    if (!Number.isInteger(parsedVlan) || parsedVlan < 1 || parsedVlan > 4094) {
+      setVlansError("VLAN ID musi być liczbą z zakresu 1-4094");
+      return;
+    }
+
+    setVlanSubmitting(true);
+    setVlansError("");
+    try {
+      const { response, payload } = await request("/vlans", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify({
+          root_id: selectedRootId,
+          vlan_id: parsedVlan,
+          name: newVlan.name,
+          notes: newVlan.notes || null,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(parseApiError("Nie udało się utworzyć VLAN", payload));
+      }
+
+      setNewVlan({ vlanId: "", name: "", notes: "" });
+      await loadVlans(selectedRootId);
+    } catch (err) {
+      setVlansError(err.message || "Błąd tworzenia VLAN");
+    } finally {
+      setVlanSubmitting(false);
+    }
   };
 
   return (
@@ -493,6 +570,56 @@ function ExplorerScreen({ me, accessToken, onLogout }) {
               </button>
             ))}
           </div>
+
+          <section className="subpanel">
+            <h3>VLAN</h3>
+            {vlansLoading ? <p>Ładowanie VLAN...</p> : null}
+            {vlansError ? <p className="error">{vlansError}</p> : null}
+            {!vlansLoading && !vlansError && vlans.length === 0 ? <p>Brak VLAN dla tego roota.</p> : null}
+            {!vlansLoading && vlans.length > 0 ? (
+              <ul className="simple-list">
+                {vlans.map((vlan) => (
+                  <li key={vlan.id}>
+                    <strong>VLAN {vlan.vlan_id}</strong> - {vlan.name}
+                    {vlan.notes ? <span className="muted"> ({vlan.notes})</span> : null}
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+
+            {isAdmin ? (
+              <form className="inline-form" onSubmit={onCreateVlan}>
+                <h4>Dodaj VLAN</h4>
+                <label htmlFor="vlan-id">VLAN ID</label>
+                <input
+                  id="vlan-id"
+                  inputMode="numeric"
+                  value={newVlan.vlanId}
+                  onChange={(event) => setNewVlan((prev) => ({ ...prev, vlanId: event.target.value }))}
+                  placeholder="10"
+                  required
+                />
+                <label htmlFor="vlan-name">Nazwa</label>
+                <input
+                  id="vlan-name"
+                  value={newVlan.name}
+                  onChange={(event) => setNewVlan((prev) => ({ ...prev, name: event.target.value }))}
+                  placeholder="LAN"
+                  required
+                />
+                <label htmlFor="vlan-notes">Notatki</label>
+                <input
+                  id="vlan-notes"
+                  value={newVlan.notes}
+                  onChange={(event) => setNewVlan((prev) => ({ ...prev, notes: event.target.value }))}
+                  placeholder="opcjonalnie"
+                />
+                <button type="submit" disabled={vlanSubmitting}>
+                  {vlanSubmitting ? "Zapisywanie..." : "Dodaj VLAN"}
+                </button>
+              </form>
+            ) : null}
+          </section>
         </>
       ) : null}
     </section>

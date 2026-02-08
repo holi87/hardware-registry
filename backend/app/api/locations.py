@@ -9,10 +9,10 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.deps import require_admin, require_user
+from app.api.root_access import ensure_root_exists, get_accessible_root_ids, require_root_access
 from app.db.session import get_db
 from app.models.location import Location
-from app.models.user import User, UserRole
-from app.models.user_root import UserRoot
+from app.models.user import User
 
 router = APIRouter(tags=["locations"])
 
@@ -63,27 +63,6 @@ class UpdateLocationRequest(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=255)
     parent_id: UUID | None = None
     notes: str | None = None
-
-
-def _get_accessible_root_ids(db: Session, user: User) -> set[UUID]:
-    if user.role == UserRole.ADMIN:
-        rows = db.scalars(select(Location.id).where(Location.id == Location.root_id)).all()
-        return set(rows)
-
-    rows = db.scalars(select(UserRoot.root_id).where(UserRoot.user_id == user.id)).all()
-    return set(rows)
-
-
-def _ensure_root_exists(db: Session, root_id: UUID) -> Location:
-    root = db.get(Location, root_id)
-    if root is None or root.id != root.root_id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Root not found")
-    return root
-
-
-def _validate_root_access(db: Session, user: User, root_id: UUID) -> None:
-    if root_id not in _get_accessible_root_ids(db, user):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No access to this root")
 
 
 def _validate_parent_for_root(db: Session, root_id: UUID, parent_id: UUID) -> Location:
@@ -146,7 +125,7 @@ def _build_tree(locations: list[Location], root_id: UUID) -> LocationTreeNode:
 
 @router.get("/roots", response_model=list[RootResponse])
 def list_roots(current_user: User = Depends(require_user), db: Session = Depends(get_db)) -> list[RootResponse]:
-    accessible_root_ids = _get_accessible_root_ids(db, current_user)
+    accessible_root_ids = get_accessible_root_ids(db, current_user)
     if not accessible_root_ids:
         return []
 
@@ -163,8 +142,8 @@ def locations_tree(
     current_user: User = Depends(require_user),
     db: Session = Depends(get_db),
 ) -> LocationTreeNode:
-    _validate_root_access(db, current_user, root_id)
-    _ensure_root_exists(db, root_id)
+    require_root_access(db, current_user, root_id)
+    ensure_root_exists(db, root_id)
 
     locations = db.scalars(select(Location).where(Location.root_id == root_id)).all()
     if not locations:
@@ -179,7 +158,7 @@ def create_location(
     _: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ) -> LocationSummary:
-    _ensure_root_exists(db, payload.root_id)
+    ensure_root_exists(db, payload.root_id)
 
     parent_id = payload.parent_id or payload.root_id
     _validate_parent_for_root(db, payload.root_id, parent_id)

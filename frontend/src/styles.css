@@ -132,6 +132,32 @@ button:disabled {
   grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
 }
 
+.subpanel {
+  margin-top: 0.8rem;
+  border-top: 1px solid #e2e8f0;
+  padding-top: 0.9rem;
+  display: grid;
+  gap: 0.6rem;
+}
+
+.simple-list {
+  margin: 0;
+  padding-left: 1.1rem;
+  display: grid;
+  gap: 0.35rem;
+}
+
+.inline-form {
+  border: 1px solid #e2e8f0;
+  background: #f8fafc;
+  border-radius: 12px;
+  padding: 0.7rem;
+}
+
+.inline-form h4 {
+  margin: 0 0 0.5rem;
+}
+
 .tile {
   text-align: left;
   background: linear-gradient(180deg, #eff6ff, #dbeafe);
