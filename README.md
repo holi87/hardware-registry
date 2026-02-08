@@ -23,6 +23,22 @@ curl -sSf http://localhost:8381/api/health
 curl -I http://localhost:8380
 ```
 
+## Backup / restore Postgres
+
+Backup:
+
+```bash
+docker compose -f compose.yml --env-file .env exec -T db \
+  pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" > backup.sql
+```
+
+Restore:
+
+```bash
+cat backup.sql | docker compose -f compose.yml --env-file .env exec -T db \
+  psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"
+```
+
 ## Uwagi bezpieczeństwa
 
 - Nie commituj plików `.env`, `compose.yml`, `compose.override.yml`.
