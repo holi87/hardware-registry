@@ -1,6 +1,9 @@
 # Traefik (prod)
 
-Docelowa domena: `sprzet.sh.info.pl`
+Docelowe domeny:
+
+- `sprzet.sh.info.pl`
+- `www.sprzet.sh.info.pl`
 
 Założenia:
 
@@ -30,6 +33,6 @@ docker compose -f compose.prod.yml --env-file .env.prod up -d --build
 
 W `compose.prod.yml` Traefik używa etykiet:
 
-- `traefik.http.routers.hardware-registry.rule=Host(\`sprzet.sh.info.pl\`)`
+- `traefik.http.routers.hardware-registry.rule=Host(\`sprzet.sh.info.pl\`) || Host(\`www.sprzet.sh.info.pl\`)`
 - `traefik.http.routers.hardware-registry.entrypoints=web`
 - `traefik.http.services.hardware-registry.loadbalancer.server.port=8080`

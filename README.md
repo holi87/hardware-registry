@@ -28,7 +28,7 @@ curl -I http://localhost:8380
 
 ## Uruchomienie produkcyjne (Traefik)
 
-Konfiguracja dla domeny `sprzet.sh.info.pl` jest przygotowana w szablonach:
+Konfiguracja dla domen `sprzet.sh.info.pl` i `www.sprzet.sh.info.pl` jest przygotowana w szablonach:
 
 - `.env.prod.example`
 - `compose.prod.example.yml`

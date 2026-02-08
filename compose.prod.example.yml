@@ -56,7 +56,7 @@ services:
     labels:
       - traefik.enable=true
       - traefik.docker.network=proxy
-      - traefik.http.routers.hardware-registry.rule=Host(`${TRAEFIK_DOMAIN}`)
+      - traefik.http.routers.hardware-registry.rule=Host(`${TRAEFIK_DOMAIN}`) || Host(`www.${TRAEFIK_DOMAIN}`)
       - traefik.http.routers.hardware-registry.entrypoints=web
       - traefik.http.services.hardware-registry.loadbalancer.server.port=8080
     networks:
