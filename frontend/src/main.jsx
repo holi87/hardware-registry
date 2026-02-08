@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
+import cytoscape from "cytoscape";
 import "./styles.css";
 
 const apiBase = (import.meta.env.VITE_API_URL || "http://localhost:8381/api").replace(/\/$/, "");
@@ -314,6 +315,15 @@ function ExplorerScreen({ me, accessToken, onLogout }) {
     vlanId: "",
     notes: "",
   });
+  const [graphData, setGraphData] = useState({ devices: [], connections: [] });
+  const [graphLoading, setGraphLoading] = useState(false);
+  const [graphError, setGraphError] = useState("");
+  const [graphTechnologyFilter, setGraphTechnologyFilter] = useState("all");
+  const [graphSpaceFilter, setGraphSpaceFilter] = useState("all");
+  const [graphTypeFilter, setGraphTypeFilter] = useState("all");
+  const [graphSearch, setGraphSearch] = useState("");
+  const graphContainerRef = useRef(null);
+  const graphInstanceRef = useRef(null);
 
   const isAdmin = me.role === "ADMIN";
 
@@ -516,6 +526,29 @@ function ExplorerScreen({ me, accessToken, onLogout }) {
     }
   };
 
+  const loadGraph = async (rootId) => {
+    if (!rootId) {
+      setGraphData({ devices: [], connections: [] });
+      return;
+    }
+    setGraphLoading(true);
+    setGraphError("");
+    try {
+      const { response, payload } = await request(`/graph?root_id=${rootId}`, {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
+      if (!response.ok) {
+        throw new Error(parseApiError("Nie udało się pobrać grafu", payload));
+      }
+      setGraphData(payload || { devices: [], connections: [] });
+    } catch (err) {
+      setGraphData({ devices: [], connections: [] });
+      setGraphError(err.message || "Błąd pobierania grafu");
+    } finally {
+      setGraphLoading(false);
+    }
+  };
+
   useEffect(() => {
     let mounted = true;
 
@@ -628,6 +661,11 @@ function ExplorerScreen({ me, accessToken, onLogout }) {
   useEffect(() => {
     setDeviceInterfacesMap({});
     loadRootDevices(selectedRootId);
+    loadGraph(selectedRootId);
+    setGraphTechnologyFilter("all");
+    setGraphSpaceFilter("all");
+    setGraphTypeFilter("all");
+    setGraphSearch("");
     setNewConnection({
       fromDeviceId: "",
       fromInterfaceId: "",
@@ -656,6 +694,16 @@ function ExplorerScreen({ me, accessToken, onLogout }) {
     }
     ensureDeviceInterfaces(newConnection.toDeviceId);
   }, [newConnection.toDeviceId, accessToken]);
+
+  useEffect(
+    () => () => {
+      if (graphInstanceRef.current) {
+        graphInstanceRef.current.destroy();
+        graphInstanceRef.current = null;
+      }
+    },
+    [],
+  );
 
   const maps = useMemo(() => {
     const byId = new Map();
@@ -746,6 +794,117 @@ function ExplorerScreen({ me, accessToken, onLogout }) {
     }
     return map;
   }, [deviceInterfacesMap, deviceDetail]);
+
+  const graphTechnologyOptions = useMemo(() => {
+    const values = new Set(graphData.connections.map((edge) => edge.technology));
+    return Array.from(values).sort();
+  }, [graphData]);
+
+  const graphTypeOptions = useMemo(() => {
+    const values = new Set(graphData.devices.map((node) => node.type));
+    return Array.from(values).sort((a, b) => a.localeCompare(b, "pl"));
+  }, [graphData]);
+
+  const filteredGraph = useMemo(() => {
+    const devicesFiltered = graphData.devices.filter((node) => {
+      if (graphSpaceFilter !== "all" && node.space_id !== graphSpaceFilter) {
+        return false;
+      }
+      if (graphTypeFilter !== "all" && node.type !== graphTypeFilter) {
+        return false;
+      }
+      return true;
+    });
+
+    const deviceIds = new Set(devicesFiltered.map((node) => node.id));
+    const connectionsFiltered = graphData.connections.filter((edge) => {
+      if (graphTechnologyFilter !== "all" && edge.technology !== graphTechnologyFilter) {
+        return false;
+      }
+      return deviceIds.has(edge.from_device_id) && deviceIds.has(edge.to_device_id);
+    });
+
+    return { devices: devicesFiltered, connections: connectionsFiltered };
+  }, [graphData, graphSpaceFilter, graphTechnologyFilter, graphTypeFilter]);
+
+  const graphElements = useMemo(() => {
+    const nodes = filteredGraph.devices.map((node) => ({
+      data: {
+        id: node.id,
+        label: node.name,
+        type: node.type,
+        spaceId: node.space_id,
+      },
+    }));
+    const edges = filteredGraph.connections.map((edge) => ({
+      data: {
+        id: edge.id,
+        source: edge.from_device_id,
+        target: edge.to_device_id,
+        label: edge.technology,
+      },
+    }));
+    return [...nodes, ...edges];
+  }, [filteredGraph]);
+
+  useEffect(() => {
+    if (!graphContainerRef.current) {
+      return;
+    }
+
+    if (graphInstanceRef.current) {
+      graphInstanceRef.current.destroy();
+      graphInstanceRef.current = null;
+    }
+
+    graphInstanceRef.current = cytoscape({
+      container: graphContainerRef.current,
+      elements: graphElements,
+      style: [
+        {
+          selector: "node",
+          style: {
+            label: "data(label)",
+            "background-color": "#0f172a",
+            color: "#f8fafc",
+            "font-size": "11px",
+            "text-valign": "center",
+            "text-halign": "center",
+            padding: "8px",
+            shape: "roundrectangle",
+            width: "label",
+            height: "label",
+          },
+        },
+        {
+          selector: "edge",
+          style: {
+            width: 2,
+            "line-color": "#64748b",
+            "target-arrow-color": "#64748b",
+            "target-arrow-shape": "triangle",
+            "curve-style": "bezier",
+            label: "data(label)",
+            "font-size": "9px",
+            color: "#334155",
+          },
+        },
+        {
+          selector: ".highlighted",
+          style: {
+            "background-color": "#0ea5e9",
+            "line-color": "#0ea5e9",
+            "target-arrow-color": "#0ea5e9",
+          },
+        },
+      ],
+      layout: {
+        name: "cose",
+        fit: true,
+        animate: false,
+      },
+    });
+  }, [graphElements]);
 
   useEffect(() => {
     if (!selectedRootId || spaces.length === 0) {
@@ -1031,6 +1190,30 @@ function ExplorerScreen({ me, accessToken, onLogout }) {
     } finally {
       setConnectionSubmitting(false);
     }
+  };
+
+  const onGraphSearch = () => {
+    const cy = graphInstanceRef.current;
+    const term = graphSearch.trim().toLowerCase();
+    if (!cy || !term) {
+      return;
+    }
+
+    const matches = cy.nodes().filter((node) => node.data("label").toLowerCase().includes(term));
+    if (matches.length === 0) {
+      return;
+    }
+
+    const target = matches[0];
+    cy.elements().removeClass("highlighted");
+    target.addClass("highlighted");
+    cy.animate({
+      fit: {
+        eles: target,
+        padding: 80,
+      },
+      duration: 250,
+    });
   };
 
   return (
@@ -1608,6 +1791,78 @@ function ExplorerScreen({ me, accessToken, onLogout }) {
                     ) : null}
                   </>
                 ) : null}
+              </div>
+            ) : null}
+          </section>
+
+          <section className="subpanel">
+            <h3>Graf topologii</h3>
+            <div className="graph-filters">
+              <div className="field">
+                <label htmlFor="graph-tech">Technologia</label>
+                <select
+                  id="graph-tech"
+                  value={graphTechnologyFilter}
+                  onChange={(event) => setGraphTechnologyFilter(event.target.value)}
+                >
+                  <option value="all">Wszystkie</option>
+                  {graphTechnologyOptions.map((option) => (
+                    <option key={option} value={option}>
+                      {option}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="field">
+                <label htmlFor="graph-space">Przestrzeń</label>
+                <select
+                  id="graph-space"
+                  value={graphSpaceFilter}
+                  onChange={(event) => setGraphSpaceFilter(event.target.value)}
+                >
+                  <option value="all">Wszystkie</option>
+                  {spaces.map((space) => (
+                    <option key={space.id} value={space.id}>
+                      {space.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="field">
+                <label htmlFor="graph-type">Typ urządzenia</label>
+                <select
+                  id="graph-type"
+                  value={graphTypeFilter}
+                  onChange={(event) => setGraphTypeFilter(event.target.value)}
+                >
+                  <option value="all">Wszystkie</option>
+                  {graphTypeOptions.map((option) => (
+                    <option key={option} value={option}>
+                      {option}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            <div className="graph-search">
+              <input
+                value={graphSearch}
+                onChange={(event) => setGraphSearch(event.target.value)}
+                placeholder="Szukaj urządzenia..."
+              />
+              <button type="button" onClick={onGraphSearch}>
+                Szukaj i centruj
+              </button>
+            </div>
+
+            {graphLoading ? <p>Ładowanie grafu...</p> : null}
+            {graphError ? <p className="error">{graphError}</p> : null}
+            {!graphLoading && !graphError ? (
+              <div className="graph-canvas" ref={graphContainerRef}>
+                {filteredGraph.devices.length === 0 ? <p>Brak danych grafu dla wybranych filtrów.</p> : null}
               </div>
             ) : null}
           </section>

@@ -230,6 +230,32 @@ button:disabled {
   margin: 0;
 }
 
+.graph-filters {
+  display: grid;
+  gap: 0.6rem;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+}
+
+.graph-search {
+  display: grid;
+  gap: 0.5rem;
+  grid-template-columns: 1fr auto;
+}
+
+.graph-canvas {
+  border: 1px solid #cbd5e1;
+  border-radius: 12px;
+  min-height: 360px;
+  background: #ffffff;
+  overflow: hidden;
+}
+
+@media (max-width: 640px) {
+  .graph-search {
+    grid-template-columns: 1fr;
+  }
+}
+
 .tile {
   text-align: left;
   background: linear-gradient(180deg, #eff6ff, #dbeafe);
