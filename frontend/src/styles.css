@@ -114,6 +114,10 @@ button:disabled {
   background: #334155;
 }
 
+.button-danger {
+  background: #b91c1c;
+}
+
 .field {
   display: grid;
   gap: 0.35rem;
@@ -492,6 +496,35 @@ button:disabled {
 .password-cell {
   display: grid;
   gap: 0.35rem;
+}
+
+.table-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.table-actions button {
+  min-height: 36px;
+  padding: 0.5rem 0.7rem;
+}
+
+.edit-row td {
+  background: #f8fafc;
+}
+
+.compact-form {
+  margin-top: 0.25rem;
+}
+
+.edit-grid {
+  display: grid;
+  gap: 0.5rem;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+.span-2 {
+  grid-column: span 2;
 }
 
 @media (max-width: 640px) {

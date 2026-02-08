@@ -316,3 +316,18 @@ def create_interface(
     db.refresh(interface)
 
     return _interface_to_response(interface)
+
+
+@router.delete("/{device_id}")
+def delete_device(
+    device_id: UUID,
+    _: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> dict[str, str]:
+    device = db.get(Device, device_id)
+    if device is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Device not found")
+
+    db.delete(device)
+    db.commit()
+    return {"status": "ok"}

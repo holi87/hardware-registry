@@ -4,15 +4,17 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.api.deps import require_admin, require_user
 from app.api.root_access import ensure_root_exists, require_root_access
+from app.models.connection import Connection
 from app.db.session import get_db
 from app.models.user import User
 from app.models.vlan import Vlan
+from app.models.wifi_network import WifiNetwork
 
 router = APIRouter(prefix="/vlans", tags=["vlans"])
 
@@ -186,3 +188,30 @@ def update_vlan(
         notes=vlan.notes,
         created_at=vlan.created_at,
     )
+
+
+@router.delete("/{vlan_id}")
+def delete_vlan(
+    vlan_id: UUID,
+    _: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> dict[str, str]:
+    vlan = db.get(Vlan, vlan_id)
+    if vlan is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="VLAN not found")
+
+    wifi_dependencies = db.scalar(select(func.count(WifiNetwork.id)).where(WifiNetwork.vlan_id == vlan.id)) or 0
+    connection_dependencies = db.scalar(select(func.count(Connection.id)).where(Connection.vlan_id == vlan.id)) or 0
+    if wifi_dependencies or connection_dependencies:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "Cannot delete VLAN with dependencies. "
+                f"Linked Wi-Fi: {wifi_dependencies}, linked connections: {connection_dependencies}. "
+                "Remove or edit dependencies first."
+            ),
+        )
+
+    db.delete(vlan)
+    db.commit()
+    return {"status": "ok"}

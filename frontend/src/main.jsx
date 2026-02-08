@@ -319,6 +319,15 @@ function ExplorerScreen({ me, accessToken, onLogout }) {
     ipRangeEnd: "",
     notes: "",
   });
+  const [editingVlanId, setEditingVlanId] = useState("");
+  const [vlanEditForm, setVlanEditForm] = useState({
+    vlanId: "",
+    name: "",
+    subnetMask: "",
+    ipRangeStart: "",
+    ipRangeEnd: "",
+    notes: "",
+  });
 
   const [wifiList, setWifiList] = useState([]);
   const [wifiForm, setWifiForm] = useState({
@@ -329,6 +338,15 @@ function ExplorerScreen({ me, accessToken, onLogout }) {
     vlanId: "",
     notes: "",
   });
+  const [editingWifiId, setEditingWifiId] = useState("");
+  const [wifiEditForm, setWifiEditForm] = useState({
+    spaceId: "",
+    ssid: "",
+    password: "",
+    security: "",
+    vlanId: "",
+    notes: "",
+  });
   const [wifiSpaceFilter, setWifiSpaceFilter] = useState("all");
   const [revealedWifiPasswords, setRevealedWifiPasswords] = useState({});
   const revealTimersRef = useRef(new Map());
@@ -336,6 +354,23 @@ function ExplorerScreen({ me, accessToken, onLogout }) {
   const [deviceList, setDeviceList] = useState([]);
   const [deviceSpaceFilter, setDeviceSpaceFilter] = useState("all");
   const [deviceForm, setDeviceForm] = useState({
+    spaceId: "",
+    name: "",
+    type: "",
+    vendor: "",
+    model: "",
+    serial: "",
+    notes: "",
+    isReceiver: false,
+    supportsWifi: false,
+    supportsEthernet: false,
+    supportsZigbee: false,
+    supportsMatterThread: false,
+    supportsBluetooth: false,
+    supportsBle: false,
+  });
+  const [editingDeviceId, setEditingDeviceId] = useState("");
+  const [deviceEditForm, setDeviceEditForm] = useState({
     spaceId: "",
     name: "",
     type: "",
@@ -390,12 +425,6 @@ function ExplorerScreen({ me, accessToken, onLogout }) {
     }
     return deviceList.filter((item) => item.space_id === deviceSpaceFilter);
   }, [deviceList, deviceSpaceFilter]);
-
-  const rootNameById = useMemo(() => {
-    const map = new Map();
-    roots.forEach((root) => map.set(root.id, root.name));
-    return map;
-  }, [roots]);
 
   const pushToast = (message, type = "success") => {
     const id = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
@@ -596,6 +625,9 @@ function ExplorerScreen({ me, accessToken, onLogout }) {
       return;
     }
     setError("");
+    setEditingVlanId("");
+    setEditingWifiId("");
+    setEditingDeviceId("");
     refreshAllForRoot(selectedRootId).catch((err) => setError(err.message || "Błąd odświeżania danych"));
     if (topologyUrl) {
       URL.revokeObjectURL(topologyUrl);
@@ -873,6 +905,244 @@ function ExplorerScreen({ me, accessToken, onLogout }) {
     }
   };
 
+  const onStartEditVlan = (vlan) => {
+    setEditingVlanId(vlan.id);
+    setVlanEditForm({
+      vlanId: String(vlan.vlan_id),
+      name: vlan.name || "",
+      subnetMask: vlan.subnet_mask || "",
+      ipRangeStart: vlan.ip_range_start || "",
+      ipRangeEnd: vlan.ip_range_end || "",
+      notes: vlan.notes || "",
+    });
+  };
+
+  const onSaveVlan = async (vlanId) => {
+    if (!isAdmin || !selectedRootId) {
+      return;
+    }
+    const parsedVlanId = Number(vlanEditForm.vlanId);
+    if (!Number.isInteger(parsedVlanId) || parsedVlanId < 1 || parsedVlanId > 4094) {
+      setError("VLAN ID musi być liczbą 1-4094");
+      return;
+    }
+
+    setError("");
+    try {
+      const { response, payload } = await request(`/vlans/${vlanId}`, {
+        method: "PATCH",
+        headers: authHeaders(accessToken, { "Content-Type": "application/json" }),
+        body: JSON.stringify({
+          vlan_id: parsedVlanId,
+          name: vlanEditForm.name,
+          subnet_mask: vlanEditForm.subnetMask,
+          ip_range_start: vlanEditForm.ipRangeStart,
+          ip_range_end: vlanEditForm.ipRangeEnd,
+          notes: vlanEditForm.notes || null,
+        }),
+      });
+      if (!response.ok) {
+        throw new Error(parseApiError("Nie udało się zaktualizować VLAN", payload));
+      }
+      setEditingVlanId("");
+      await loadVlans(selectedRootId);
+      pushToast("VLAN zaktualizowany");
+    } catch (err) {
+      setError(err.message || "Błąd edycji VLAN");
+    }
+  };
+
+  const onDeleteVlan = async (vlanId) => {
+    if (!isAdmin || !selectedRootId) {
+      return;
+    }
+    if (!window.confirm("Usunąć VLAN?")) {
+      return;
+    }
+    setError("");
+    try {
+      const { response, payload } = await request(`/vlans/${vlanId}`, {
+        method: "DELETE",
+        headers: authHeaders(accessToken),
+      });
+      if (!response.ok) {
+        throw new Error(parseApiError("Nie udało się usunąć VLAN", payload));
+      }
+      if (editingVlanId === vlanId) {
+        setEditingVlanId("");
+      }
+      await loadVlans(selectedRootId);
+      await loadWifi(selectedRootId);
+      pushToast("VLAN usunięty");
+    } catch (err) {
+      setError(err.message || "Błąd usuwania VLAN");
+    }
+  };
+
+  const onStartEditWifi = (wifi) => {
+    setEditingWifiId(wifi.id);
+    setWifiEditForm({
+      spaceId: wifi.space_id || "",
+      ssid: wifi.ssid || "",
+      password: "",
+      security: wifi.security || "",
+      vlanId: wifi.vlan_id || "",
+      notes: wifi.notes || "",
+    });
+  };
+
+  const onSaveWifi = async (wifiId) => {
+    if (!isAdmin || !selectedRootId) {
+      return;
+    }
+    if (!wifiEditForm.spaceId || !wifiEditForm.vlanId) {
+      setError("Wi-Fi wymaga przestrzeni i VLAN");
+      return;
+    }
+
+    const body = {
+      space_id: wifiEditForm.spaceId,
+      ssid: wifiEditForm.ssid,
+      security: wifiEditForm.security,
+      vlan_id: wifiEditForm.vlanId,
+      notes: wifiEditForm.notes || null,
+    };
+    if (wifiEditForm.password.trim().length > 0) {
+      body.password = wifiEditForm.password;
+    }
+
+    setError("");
+    try {
+      const { response, payload } = await request(`/wifi/${wifiId}`, {
+        method: "PATCH",
+        headers: authHeaders(accessToken, { "Content-Type": "application/json" }),
+        body: JSON.stringify(body),
+      });
+      if (!response.ok) {
+        throw new Error(parseApiError("Nie udało się zaktualizować Wi-Fi", payload));
+      }
+      setEditingWifiId("");
+      await loadWifi(selectedRootId);
+      pushToast("Wi-Fi zaktualizowane");
+    } catch (err) {
+      setError(err.message || "Błąd edycji Wi-Fi");
+    }
+  };
+
+  const onDeleteWifi = async (wifiId) => {
+    if (!isAdmin || !selectedRootId) {
+      return;
+    }
+    if (!window.confirm("Usunąć sieć Wi-Fi?")) {
+      return;
+    }
+    setError("");
+    try {
+      const { response, payload } = await request(`/wifi/${wifiId}`, {
+        method: "DELETE",
+        headers: authHeaders(accessToken),
+      });
+      if (!response.ok) {
+        throw new Error(parseApiError("Nie udało się usunąć Wi-Fi", payload));
+      }
+      if (editingWifiId === wifiId) {
+        setEditingWifiId("");
+      }
+      await loadWifi(selectedRootId);
+      pushToast("Wi-Fi usunięte");
+    } catch (err) {
+      setError(err.message || "Błąd usuwania Wi-Fi");
+    }
+  };
+
+  const onStartEditDevice = (device) => {
+    setEditingDeviceId(device.id);
+    setDeviceEditForm({
+      spaceId: device.space_id || "",
+      name: device.name || "",
+      type: device.type || "",
+      vendor: device.vendor || "",
+      model: device.model || "",
+      serial: device.serial || "",
+      notes: device.notes || "",
+      isReceiver: Boolean(device.is_receiver),
+      supportsWifi: Boolean(device.supports_wifi),
+      supportsEthernet: Boolean(device.supports_ethernet),
+      supportsZigbee: Boolean(device.supports_zigbee),
+      supportsMatterThread: Boolean(device.supports_matter_thread),
+      supportsBluetooth: Boolean(device.supports_bluetooth),
+      supportsBle: Boolean(device.supports_ble),
+    });
+  };
+
+  const onSaveDevice = async (deviceId) => {
+    if (!isAdmin || !selectedRootId) {
+      return;
+    }
+    if (!deviceEditForm.spaceId) {
+      setError("Wybierz przestrzeń dla urządzenia");
+      return;
+    }
+
+    setError("");
+    try {
+      const { response, payload } = await request(`/devices/${deviceId}`, {
+        method: "PATCH",
+        headers: authHeaders(accessToken, { "Content-Type": "application/json" }),
+        body: JSON.stringify({
+          space_id: deviceEditForm.spaceId,
+          name: deviceEditForm.name,
+          type: deviceEditForm.type,
+          vendor: deviceEditForm.vendor || null,
+          model: deviceEditForm.model || null,
+          serial: deviceEditForm.serial || null,
+          notes: deviceEditForm.notes || null,
+          is_receiver: deviceEditForm.isReceiver,
+          supports_wifi: deviceEditForm.supportsWifi,
+          supports_ethernet: deviceEditForm.supportsEthernet,
+          supports_zigbee: deviceEditForm.supportsZigbee,
+          supports_matter_thread: deviceEditForm.supportsMatterThread,
+          supports_bluetooth: deviceEditForm.supportsBluetooth,
+          supports_ble: deviceEditForm.supportsBle,
+        }),
+      });
+      if (!response.ok) {
+        throw new Error(parseApiError("Nie udało się zaktualizować urządzenia", payload));
+      }
+      setEditingDeviceId("");
+      await loadDevices(selectedRootId);
+      pushToast("Urządzenie zaktualizowane");
+    } catch (err) {
+      setError(err.message || "Błąd edycji urządzenia");
+    }
+  };
+
+  const onDeleteDevice = async (deviceId) => {
+    if (!isAdmin || !selectedRootId) {
+      return;
+    }
+    if (!window.confirm("Usunąć urządzenie?")) {
+      return;
+    }
+    setError("");
+    try {
+      const { response, payload } = await request(`/devices/${deviceId}`, {
+        method: "DELETE",
+        headers: authHeaders(accessToken),
+      });
+      if (!response.ok) {
+        throw new Error(parseApiError("Nie udało się usunąć urządzenia", payload));
+      }
+      if (editingDeviceId === deviceId) {
+        setEditingDeviceId("");
+      }
+      await loadDevices(selectedRootId);
+      pushToast("Urządzenie usunięte");
+    } catch (err) {
+      setError(err.message || "Błąd usuwania urządzenia");
+    }
+  };
+
   const onGenerateTopology = async () => {
     if (!selectedRootId) {
       return;
@@ -1113,24 +1383,131 @@ function ExplorerScreen({ me, accessToken, onLogout }) {
               <th>Range start</th>
               <th>Range end</th>
               <th>Notatki</th>
+              <th>Akcje</th>
             </tr>
           </thead>
           <tbody>
             {vlanList.length === 0 ? (
               <tr>
-                <td colSpan={6}>Brak VLAN</td>
+                <td colSpan={7}>Brak VLAN</td>
               </tr>
             ) : (
-              vlanList.map((vlan) => (
-                <tr key={vlan.id}>
-                  <td>{vlan.vlan_id}</td>
-                  <td>{vlan.name}</td>
-                  <td>{vlan.subnet_mask}</td>
-                  <td>{vlan.ip_range_start}</td>
-                  <td>{vlan.ip_range_end}</td>
-                  <td>{vlan.notes || "-"}</td>
-                </tr>
-              ))
+              vlanList.map((vlan) => {
+                const isEditing = isAdmin && editingVlanId === vlan.id;
+                return (
+                  <React.Fragment key={vlan.id}>
+                    <tr>
+                      <td>{vlan.vlan_id}</td>
+                      <td>{vlan.name}</td>
+                      <td>{vlan.subnet_mask}</td>
+                      <td>{vlan.ip_range_start}</td>
+                      <td>{vlan.ip_range_end}</td>
+                      <td>{vlan.notes || "-"}</td>
+                      <td>
+                        {isAdmin ? (
+                          <div className="table-actions">
+                            <button type="button" className="button-secondary" onClick={() => onStartEditVlan(vlan)}>
+                              {isEditing ? "Edytujesz" : "Edytuj"}
+                            </button>
+                            <button type="button" className="button-danger" onClick={() => onDeleteVlan(vlan.id)}>
+                              Usuń
+                            </button>
+                          </div>
+                        ) : (
+                          "-"
+                        )}
+                      </td>
+                    </tr>
+                    {isEditing ? (
+                      <tr className="edit-row">
+                        <td colSpan={7}>
+                          <form
+                            className="inline-form compact-form"
+                            onSubmit={(event) => {
+                              event.preventDefault();
+                              onSaveVlan(vlan.id);
+                            }}
+                          >
+                            <h4>Edycja VLAN</h4>
+                            <div className="edit-grid">
+                              <div>
+                                <label htmlFor={`vlan-edit-id-${vlan.id}`}>VLAN ID</label>
+                                <input
+                                  id={`vlan-edit-id-${vlan.id}`}
+                                  inputMode="numeric"
+                                  value={vlanEditForm.vlanId}
+                                  onChange={(event) =>
+                                    setVlanEditForm((prev) => ({ ...prev, vlanId: event.target.value }))
+                                  }
+                                  required
+                                />
+                              </div>
+                              <div>
+                                <label htmlFor={`vlan-edit-name-${vlan.id}`}>Nazwa</label>
+                                <input
+                                  id={`vlan-edit-name-${vlan.id}`}
+                                  value={vlanEditForm.name}
+                                  onChange={(event) => setVlanEditForm((prev) => ({ ...prev, name: event.target.value }))}
+                                  required
+                                />
+                              </div>
+                              <div>
+                                <label htmlFor={`vlan-edit-mask-${vlan.id}`}>Maska</label>
+                                <input
+                                  id={`vlan-edit-mask-${vlan.id}`}
+                                  value={vlanEditForm.subnetMask}
+                                  onChange={(event) =>
+                                    setVlanEditForm((prev) => ({ ...prev, subnetMask: event.target.value }))
+                                  }
+                                  required
+                                />
+                              </div>
+                              <div>
+                                <label htmlFor={`vlan-edit-range-start-${vlan.id}`}>Zakres IP start</label>
+                                <input
+                                  id={`vlan-edit-range-start-${vlan.id}`}
+                                  value={vlanEditForm.ipRangeStart}
+                                  onChange={(event) =>
+                                    setVlanEditForm((prev) => ({ ...prev, ipRangeStart: event.target.value }))
+                                  }
+                                  required
+                                />
+                              </div>
+                              <div>
+                                <label htmlFor={`vlan-edit-range-end-${vlan.id}`}>Zakres IP end</label>
+                                <input
+                                  id={`vlan-edit-range-end-${vlan.id}`}
+                                  value={vlanEditForm.ipRangeEnd}
+                                  onChange={(event) =>
+                                    setVlanEditForm((prev) => ({ ...prev, ipRangeEnd: event.target.value }))
+                                  }
+                                  required
+                                />
+                              </div>
+                              <div>
+                                <label htmlFor={`vlan-edit-notes-${vlan.id}`}>Notatki</label>
+                                <input
+                                  id={`vlan-edit-notes-${vlan.id}`}
+                                  value={vlanEditForm.notes}
+                                  onChange={(event) =>
+                                    setVlanEditForm((prev) => ({ ...prev, notes: event.target.value }))
+                                  }
+                                />
+                              </div>
+                            </div>
+                            <div className="table-actions">
+                              <button type="submit">Zapisz</button>
+                              <button type="button" className="button-secondary" onClick={() => setEditingVlanId("")}>
+                                Anuluj
+                              </button>
+                            </div>
+                          </form>
+                        </td>
+                      </tr>
+                    ) : null}
+                  </React.Fragment>
+                );
+              })
             )}
           </tbody>
         </table>
@@ -1226,31 +1603,149 @@ function ExplorerScreen({ me, accessToken, onLogout }) {
               <th>Przestrzeń</th>
               <th>VLAN</th>
               <th>Hasło</th>
+              <th>Notatki</th>
               <th>Akcje</th>
             </tr>
           </thead>
           <tbody>
             {filteredWifi.length === 0 ? (
               <tr>
-                <td colSpan={6}>Brak Wi-Fi</td>
+                <td colSpan={7}>Brak Wi-Fi</td>
               </tr>
             ) : (
               filteredWifi.map((wifi) => {
                 const space = spaces.find((item) => item.id === wifi.space_id);
                 const vlan = vlanList.find((item) => item.id === wifi.vlan_id);
+                const isEditing = isAdmin && editingWifiId === wifi.id;
                 return (
-                  <tr key={wifi.id}>
-                    <td>{wifi.ssid}</td>
-                    <td>{wifi.security}</td>
-                    <td>{space?.name || wifi.space_id}</td>
-                    <td>{vlan ? `VLAN ${vlan.vlan_id}` : wifi.vlan_id}</td>
-                    <td className="mono-cell">{revealedWifiPasswords[wifi.id] || "••••••••••••"}</td>
-                    <td>
-                      <button type="button" onClick={() => onRevealWifi(wifi.id)}>
-                        Pokaż
-                      </button>
-                    </td>
-                  </tr>
+                  <React.Fragment key={wifi.id}>
+                    <tr>
+                      <td>{wifi.ssid}</td>
+                      <td>{wifi.security}</td>
+                      <td>{space?.name || wifi.space_id}</td>
+                      <td>{vlan ? `VLAN ${vlan.vlan_id}` : wifi.vlan_id}</td>
+                      <td className="mono-cell">{revealedWifiPasswords[wifi.id] || "••••••••••••"}</td>
+                      <td>{wifi.notes || "-"}</td>
+                      <td>
+                        <div className="table-actions">
+                          <button type="button" onClick={() => onRevealWifi(wifi.id)}>
+                            Pokaż
+                          </button>
+                          {isAdmin ? (
+                            <>
+                              <button
+                                type="button"
+                                className="button-secondary"
+                                onClick={() => onStartEditWifi(wifi)}
+                              >
+                                {isEditing ? "Edytujesz" : "Edytuj"}
+                              </button>
+                              <button type="button" className="button-danger" onClick={() => onDeleteWifi(wifi.id)}>
+                                Usuń
+                              </button>
+                            </>
+                          ) : null}
+                        </div>
+                      </td>
+                    </tr>
+                    {isEditing ? (
+                      <tr className="edit-row">
+                        <td colSpan={7}>
+                          <form
+                            className="inline-form compact-form"
+                            onSubmit={(event) => {
+                              event.preventDefault();
+                              onSaveWifi(wifi.id);
+                            }}
+                          >
+                            <h4>Edycja Wi-Fi</h4>
+                            <div className="edit-grid">
+                              <div>
+                                <label htmlFor={`wifi-edit-ssid-${wifi.id}`}>SSID</label>
+                                <input
+                                  id={`wifi-edit-ssid-${wifi.id}`}
+                                  value={wifiEditForm.ssid}
+                                  onChange={(event) => setWifiEditForm((prev) => ({ ...prev, ssid: event.target.value }))}
+                                  required
+                                />
+                              </div>
+                              <div>
+                                <label htmlFor={`wifi-edit-password-${wifi.id}`}>Nowe hasło (opcjonalnie)</label>
+                                <input
+                                  id={`wifi-edit-password-${wifi.id}`}
+                                  type="password"
+                                  value={wifiEditForm.password}
+                                  onChange={(event) =>
+                                    setWifiEditForm((prev) => ({ ...prev, password: event.target.value }))
+                                  }
+                                  placeholder="Zostaw puste, aby nie zmieniać"
+                                />
+                              </div>
+                              <div>
+                                <label htmlFor={`wifi-edit-security-${wifi.id}`}>Security</label>
+                                <input
+                                  id={`wifi-edit-security-${wifi.id}`}
+                                  value={wifiEditForm.security}
+                                  onChange={(event) =>
+                                    setWifiEditForm((prev) => ({ ...prev, security: event.target.value }))
+                                  }
+                                  required
+                                />
+                              </div>
+                              <div>
+                                <label htmlFor={`wifi-edit-space-${wifi.id}`}>Przestrzeń</label>
+                                <select
+                                  id={`wifi-edit-space-${wifi.id}`}
+                                  value={wifiEditForm.spaceId}
+                                  onChange={(event) =>
+                                    setWifiEditForm((prev) => ({ ...prev, spaceId: event.target.value }))
+                                  }
+                                  required
+                                >
+                                  <option value="">Wybierz</option>
+                                  {spaceOptions.map((option) => (
+                                    <option key={option.id} value={option.id}>
+                                      {option.label}
+                                    </option>
+                                  ))}
+                                </select>
+                              </div>
+                              <div>
+                                <label htmlFor={`wifi-edit-vlan-${wifi.id}`}>VLAN</label>
+                                <select
+                                  id={`wifi-edit-vlan-${wifi.id}`}
+                                  value={wifiEditForm.vlanId}
+                                  onChange={(event) => setWifiEditForm((prev) => ({ ...prev, vlanId: event.target.value }))}
+                                  required
+                                >
+                                  <option value="">Wybierz VLAN</option>
+                                  {vlanList.map((option) => (
+                                    <option key={option.id} value={option.id}>
+                                      VLAN {option.vlan_id} - {option.name}
+                                    </option>
+                                  ))}
+                                </select>
+                              </div>
+                              <div>
+                                <label htmlFor={`wifi-edit-notes-${wifi.id}`}>Notatki</label>
+                                <input
+                                  id={`wifi-edit-notes-${wifi.id}`}
+                                  value={wifiEditForm.notes}
+                                  onChange={(event) => setWifiEditForm((prev) => ({ ...prev, notes: event.target.value }))}
+                                />
+                              </div>
+                            </div>
+                            <div className="table-actions">
+                              <button type="submit">Zapisz</button>
+                              <button type="button" className="button-secondary" onClick={() => setEditingWifiId("")}>
+                                Anuluj
+                              </button>
+                            </div>
+                          </form>
+                        </td>
+                      </tr>
+                    ) : null}
+                  </React.Fragment>
                 );
               })
             )}
@@ -1361,32 +1856,251 @@ function ExplorerScreen({ me, accessToken, onLogout }) {
               <th>Typ</th>
               <th>Vendor</th>
               <th>Model</th>
+              <th>Serial</th>
               <th>Przestrzeń</th>
               <th>Odbiornik</th>
+              <th>Akcje</th>
             </tr>
           </thead>
           <tbody>
             {filteredDevices.length === 0 ? (
               <tr>
-                <td colSpan={6}>Brak urządzeń</td>
+                <td colSpan={8}>Brak urządzeń</td>
               </tr>
             ) : (
               filteredDevices.map((device) => {
                 const space = spaces.find((item) => item.id === device.space_id);
                 const capabilities = [];
+                if (device.supports_wifi) capabilities.push("Wi-Fi");
+                if (device.supports_ethernet) capabilities.push("Ethernet");
                 if (device.supports_zigbee) capabilities.push("Zigbee");
                 if (device.supports_matter_thread) capabilities.push("MatterThread");
                 if (device.supports_bluetooth) capabilities.push("Bluetooth");
                 if (device.supports_ble) capabilities.push("BLE");
+                const isEditing = isAdmin && editingDeviceId === device.id;
                 return (
-                  <tr key={device.id}>
-                    <td>{device.name}</td>
-                    <td>{device.type}</td>
-                    <td>{device.vendor || "-"}</td>
-                    <td>{device.model || "-"}</td>
-                    <td>{space?.name || device.space_id}</td>
-                    <td>{device.is_receiver ? capabilities.join(", ") || "tak" : "nie"}</td>
-                  </tr>
+                  <React.Fragment key={device.id}>
+                    <tr>
+                      <td>{device.name}</td>
+                      <td>{device.type}</td>
+                      <td>{device.vendor || "-"}</td>
+                      <td>{device.model || "-"}</td>
+                      <td>{device.serial || "-"}</td>
+                      <td>{space?.name || device.space_id}</td>
+                      <td>{device.is_receiver ? capabilities.join(", ") || "tak" : "nie"}</td>
+                      <td>
+                        {isAdmin ? (
+                          <div className="table-actions">
+                            <button type="button" className="button-secondary" onClick={() => onStartEditDevice(device)}>
+                              {isEditing ? "Edytujesz" : "Edytuj"}
+                            </button>
+                            <button type="button" className="button-danger" onClick={() => onDeleteDevice(device.id)}>
+                              Usuń
+                            </button>
+                          </div>
+                        ) : (
+                          "-"
+                        )}
+                      </td>
+                    </tr>
+                    {isEditing ? (
+                      <tr className="edit-row">
+                        <td colSpan={8}>
+                          <form
+                            className="inline-form compact-form"
+                            onSubmit={(event) => {
+                              event.preventDefault();
+                              onSaveDevice(device.id);
+                            }}
+                          >
+                            <h4>Edycja urządzenia</h4>
+                            <div className="edit-grid">
+                              <div>
+                                <label htmlFor={`device-edit-name-${device.id}`}>Nazwa</label>
+                                <input
+                                  id={`device-edit-name-${device.id}`}
+                                  value={deviceEditForm.name}
+                                  onChange={(event) =>
+                                    setDeviceEditForm((prev) => ({ ...prev, name: event.target.value }))
+                                  }
+                                  required
+                                />
+                              </div>
+                              <div>
+                                <label htmlFor={`device-edit-type-${device.id}`}>Typ</label>
+                                <input
+                                  id={`device-edit-type-${device.id}`}
+                                  value={deviceEditForm.type}
+                                  onChange={(event) =>
+                                    setDeviceEditForm((prev) => ({ ...prev, type: event.target.value }))
+                                  }
+                                  required
+                                />
+                              </div>
+                              <div>
+                                <label htmlFor={`device-edit-space-${device.id}`}>Przestrzeń</label>
+                                <select
+                                  id={`device-edit-space-${device.id}`}
+                                  value={deviceEditForm.spaceId}
+                                  onChange={(event) =>
+                                    setDeviceEditForm((prev) => ({ ...prev, spaceId: event.target.value }))
+                                  }
+                                  required
+                                >
+                                  <option value="">Wybierz</option>
+                                  {spaceOptions.map((option) => (
+                                    <option key={option.id} value={option.id}>
+                                      {option.label}
+                                    </option>
+                                  ))}
+                                </select>
+                              </div>
+                              <div>
+                                <label htmlFor={`device-edit-vendor-${device.id}`}>Vendor</label>
+                                <input
+                                  id={`device-edit-vendor-${device.id}`}
+                                  value={deviceEditForm.vendor}
+                                  onChange={(event) =>
+                                    setDeviceEditForm((prev) => ({ ...prev, vendor: event.target.value }))
+                                  }
+                                />
+                              </div>
+                              <div>
+                                <label htmlFor={`device-edit-model-${device.id}`}>Model</label>
+                                <input
+                                  id={`device-edit-model-${device.id}`}
+                                  value={deviceEditForm.model}
+                                  onChange={(event) =>
+                                    setDeviceEditForm((prev) => ({ ...prev, model: event.target.value }))
+                                  }
+                                />
+                              </div>
+                              <div>
+                                <label htmlFor={`device-edit-serial-${device.id}`}>Serial</label>
+                                <input
+                                  id={`device-edit-serial-${device.id}`}
+                                  value={deviceEditForm.serial}
+                                  onChange={(event) =>
+                                    setDeviceEditForm((prev) => ({ ...prev, serial: event.target.value }))
+                                  }
+                                />
+                              </div>
+                              <div className="span-2">
+                                <label htmlFor={`device-edit-notes-${device.id}`}>Notatki</label>
+                                <input
+                                  id={`device-edit-notes-${device.id}`}
+                                  value={deviceEditForm.notes}
+                                  onChange={(event) =>
+                                    setDeviceEditForm((prev) => ({ ...prev, notes: event.target.value }))
+                                  }
+                                />
+                              </div>
+                            </div>
+
+                            <label htmlFor={`device-edit-receiver-${device.id}`} className="checkbox-row">
+                              <input
+                                id={`device-edit-receiver-${device.id}`}
+                                type="checkbox"
+                                checked={deviceEditForm.isReceiver}
+                                onChange={(event) =>
+                                  setDeviceEditForm((prev) => ({
+                                    ...prev,
+                                    isReceiver: event.target.checked,
+                                    supportsWifi: event.target.checked ? prev.supportsWifi : false,
+                                    supportsEthernet: event.target.checked ? prev.supportsEthernet : false,
+                                    supportsZigbee: event.target.checked ? prev.supportsZigbee : false,
+                                    supportsMatterThread: event.target.checked ? prev.supportsMatterThread : false,
+                                    supportsBluetooth: event.target.checked ? prev.supportsBluetooth : false,
+                                    supportsBle: event.target.checked ? prev.supportsBle : false,
+                                  }))
+                                }
+                              />
+                              Odbiornik / koordynator
+                            </label>
+
+                            <div className="checkbox-grid">
+                              <label className="checkbox-row">
+                                <input
+                                  type="checkbox"
+                                  checked={deviceEditForm.supportsWifi}
+                                  disabled={!deviceEditForm.isReceiver}
+                                  onChange={(event) =>
+                                    setDeviceEditForm((prev) => ({ ...prev, supportsWifi: event.target.checked }))
+                                  }
+                                />
+                                Wi-Fi
+                              </label>
+                              <label className="checkbox-row">
+                                <input
+                                  type="checkbox"
+                                  checked={deviceEditForm.supportsEthernet}
+                                  disabled={!deviceEditForm.isReceiver}
+                                  onChange={(event) =>
+                                    setDeviceEditForm((prev) => ({ ...prev, supportsEthernet: event.target.checked }))
+                                  }
+                                />
+                                Ethernet
+                              </label>
+                              <label className="checkbox-row">
+                                <input
+                                  type="checkbox"
+                                  checked={deviceEditForm.supportsZigbee}
+                                  disabled={!deviceEditForm.isReceiver}
+                                  onChange={(event) =>
+                                    setDeviceEditForm((prev) => ({ ...prev, supportsZigbee: event.target.checked }))
+                                  }
+                                />
+                                Zigbee
+                              </label>
+                              <label className="checkbox-row">
+                                <input
+                                  type="checkbox"
+                                  checked={deviceEditForm.supportsMatterThread}
+                                  disabled={!deviceEditForm.isReceiver}
+                                  onChange={(event) =>
+                                    setDeviceEditForm((prev) => ({
+                                      ...prev,
+                                      supportsMatterThread: event.target.checked,
+                                    }))
+                                  }
+                                />
+                                Matter Thread
+                              </label>
+                              <label className="checkbox-row">
+                                <input
+                                  type="checkbox"
+                                  checked={deviceEditForm.supportsBluetooth}
+                                  disabled={!deviceEditForm.isReceiver}
+                                  onChange={(event) =>
+                                    setDeviceEditForm((prev) => ({ ...prev, supportsBluetooth: event.target.checked }))
+                                  }
+                                />
+                                Bluetooth
+                              </label>
+                              <label className="checkbox-row">
+                                <input
+                                  type="checkbox"
+                                  checked={deviceEditForm.supportsBle}
+                                  disabled={!deviceEditForm.isReceiver}
+                                  onChange={(event) =>
+                                    setDeviceEditForm((prev) => ({ ...prev, supportsBle: event.target.checked }))
+                                  }
+                                />
+                                BLE
+                              </label>
+                            </div>
+
+                            <div className="table-actions">
+                              <button type="submit">Zapisz</button>
+                              <button type="button" className="button-secondary" onClick={() => setEditingDeviceId("")}>
+                                Anuluj
+                              </button>
+                            </div>
+                          </form>
+                        </td>
+                      </tr>
+                    ) : null}
+                  </React.Fragment>
                 );
               })
             )}

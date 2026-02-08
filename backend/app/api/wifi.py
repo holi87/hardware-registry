@@ -41,6 +41,17 @@ class CreateWifiRequest(BaseModel):
     notes: str | None = None
 
 
+class UpdateWifiRequest(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    space_id: UUID | None = None
+    ssid: str | None = Field(default=None, min_length=1, max_length=255)
+    password: str | None = Field(default=None, min_length=1, max_length=4096)
+    security: str | None = Field(default=None, min_length=1, max_length=100)
+    vlan_id: UUID | None = None
+    notes: str | None = None
+
+
 class RevealWifiResponse(BaseModel):
     password: str
 
@@ -124,6 +135,67 @@ def create_wifi(
         notes=network.notes,
         created_at=network.created_at,
     )
+
+
+@router.patch("/{wifi_id}", response_model=WifiNetworkResponse)
+def update_wifi(
+    wifi_id: UUID,
+    payload: UpdateWifiRequest,
+    _: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> WifiNetworkResponse:
+    network = db.get(WifiNetwork, wifi_id)
+    if network is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Wi-Fi network not found")
+
+    if payload.space_id is not None:
+        _validate_space(db, network.root_id, payload.space_id)
+        network.space_id = payload.space_id
+    if payload.ssid is not None:
+        network.ssid = payload.ssid
+    if payload.security is not None:
+        network.security = payload.security
+    if "vlan_id" in payload.model_fields_set:
+        if payload.vlan_id is None:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="VLAN is required for Wi-Fi")
+        _validate_vlan(db, network.root_id, payload.vlan_id)
+        network.vlan_id = payload.vlan_id
+    if "password" in payload.model_fields_set:
+        if payload.password is None:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Password cannot be null")
+        network.password_encrypted = encrypt_secret(payload.password)
+    if "notes" in payload.model_fields_set:
+        network.notes = payload.notes
+
+    db.add(network)
+    db.commit()
+    db.refresh(network)
+
+    return WifiNetworkResponse(
+        id=network.id,
+        root_id=network.root_id,
+        space_id=network.space_id,
+        ssid=network.ssid,
+        security=network.security,
+        vlan_id=network.vlan_id,
+        notes=network.notes,
+        created_at=network.created_at,
+    )
+
+
+@router.delete("/{wifi_id}")
+def delete_wifi(
+    wifi_id: UUID,
+    _: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> dict[str, str]:
+    network = db.get(WifiNetwork, wifi_id)
+    if network is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Wi-Fi network not found")
+
+    db.delete(network)
+    db.commit()
+    return {"status": "ok"}
 
 
 @router.post("/{wifi_id}/reveal", response_model=RevealWifiResponse)
