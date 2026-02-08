@@ -3,6 +3,8 @@ import { createRoot } from "react-dom/client";
 import "./styles.css";
 
 const apiBase = (import.meta.env.VITE_API_URL || "http://localhost:8381/api").replace(/\/$/, "");
+const ACCESS_KEY = "hardware_registry_access_token";
+const REFRESH_KEY = "hardware_registry_refresh_token";
 
 function SetupAdminScreen({ onSetupDone }) {
   const [email, setEmail] = useState("");
@@ -76,20 +78,91 @@ function SetupAdminScreen({ onSetupDone }) {
   );
 }
 
-function LoginPlaceholder() {
+function LoginScreen({ onLoggedIn }) {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  const canSubmit = useMemo(() => email.trim().length > 3 && password.length > 0, [email, password]);
+
+  const onSubmit = async (event) => {
+    event.preventDefault();
+    setLoading(true);
+    setError("");
+
+    try {
+      const response = await fetch(`${apiBase}/auth/login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, password }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(data.detail || "Błędny login lub hasło");
+      }
+
+      localStorage.setItem(ACCESS_KEY, data.access_token);
+      localStorage.setItem(REFRESH_KEY, data.refresh_token);
+      onLoggedIn();
+    } catch (err) {
+      setError(err.message || "Błąd logowania");
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
     <section>
       <h2>Logowanie</h2>
-      <p>Setup zakończony. W kolejnym kroku podłączony zostanie pełny flow logowania.</p>
-      <form>
+      <form onSubmit={onSubmit}>
         <label htmlFor="login-email">Email</label>
-        <input id="login-email" type="email" placeholder="admin@example.com" disabled />
+        <input
+          id="login-email"
+          type="email"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          placeholder="admin@hardware.local"
+          required
+        />
+
         <label htmlFor="login-password">Hasło</label>
-        <input id="login-password" type="password" placeholder="********" disabled />
-        <button type="button" disabled>
-          Zaloguj
+        <input
+          id="login-password"
+          type="password"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          placeholder="********"
+          required
+        />
+
+        <button type="submit" disabled={!canSubmit || loading}>
+          {loading ? "Logowanie..." : "Zaloguj"}
         </button>
       </form>
+      {error ? <p className="error">{error}</p> : null}
+    </section>
+  );
+}
+
+function MeCard({ me, onLogout }) {
+  return (
+    <section>
+      <h2>Zalogowano</h2>
+      <div className="card">
+        <p>
+          <strong>Email:</strong> {me.email}
+        </p>
+        <p>
+          <strong>Rola:</strong> {me.role}
+        </p>
+        <p>
+          <strong>Aktywne:</strong> {String(me.is_active)}
+        </p>
+      </div>
+      <button type="button" onClick={onLogout}>
+        Wyloguj
+      </button>
     </section>
   );
 }
@@ -97,7 +170,30 @@ function LoginPlaceholder() {
 function App() {
   const [loading, setLoading] = useState(true);
   const [needsSetup, setNeedsSetup] = useState(false);
+  const [me, setMe] = useState(null);
   const [error, setError] = useState("");
+
+  const fetchMe = async () => {
+    const accessToken = localStorage.getItem(ACCESS_KEY);
+    if (!accessToken) {
+      setMe(null);
+      return;
+    }
+
+    const response = await fetch(`${apiBase}/auth/me`, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+
+    if (!response.ok) {
+      localStorage.removeItem(ACCESS_KEY);
+      localStorage.removeItem(REFRESH_KEY);
+      setMe(null);
+      return;
+    }
+
+    const payload = await response.json();
+    setMe(payload);
+  };
 
   const loadStatus = async () => {
     setLoading(true);
@@ -106,12 +202,25 @@ function App() {
     try {
       const response = await fetch(`${apiBase}/setup/status`);
       const data = await response.json();
-      setNeedsSetup(Boolean(data.needs_setup));
+      const setupNeeded = Boolean(data.needs_setup);
+      setNeedsSetup(setupNeeded);
+
+      if (!setupNeeded) {
+        await fetchMe();
+      } else {
+        setMe(null);
+      }
     } catch (err) {
       setError(err.message || "Nie można pobrać statusu setup");
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleLogout = () => {
+    localStorage.removeItem(ACCESS_KEY);
+    localStorage.removeItem(REFRESH_KEY);
+    setMe(null);
   };
 
   useEffect(() => {
@@ -124,8 +233,10 @@ function App() {
       <p>API URL: {apiBase}</p>
       {loading ? <p>Sprawdzanie statusu...</p> : null}
       {error ? <p className="error">{error}</p> : null}
+
       {!loading && !error && needsSetup ? <SetupAdminScreen onSetupDone={loadStatus} /> : null}
-      {!loading && !error && !needsSetup ? <LoginPlaceholder /> : null}
+      {!loading && !error && !needsSetup && !me ? <LoginScreen onLoggedIn={fetchMe} /> : null}
+      {!loading && !error && !needsSetup && me ? <MeCard me={me} onLogout={handleLogout} /> : null}
     </main>
   );
 }
