@@ -298,6 +298,22 @@ function ExplorerScreen({ me, accessToken, onLogout }) {
   });
   const [interfaceSubmitting, setInterfaceSubmitting] = useState(false);
   const [newInterface, setNewInterface] = useState({ name: "", type: "", mac: "", notes: "" });
+  const [connections, setConnections] = useState([]);
+  const [connectionsLoading, setConnectionsLoading] = useState(false);
+  const [connectionsError, setConnectionsError] = useState("");
+  const [rootDevices, setRootDevices] = useState([]);
+  const [deviceInterfacesMap, setDeviceInterfacesMap] = useState({});
+  const [showConnectionWizard, setShowConnectionWizard] = useState(false);
+  const [connectionSubmitting, setConnectionSubmitting] = useState(false);
+  const [newConnection, setNewConnection] = useState({
+    fromDeviceId: "",
+    fromInterfaceId: "",
+    toDeviceId: "",
+    toInterfaceId: "",
+    technology: "ETHERNET",
+    vlanId: "",
+    notes: "",
+  });
 
   const isAdmin = me.role === "ADMIN";
 
@@ -433,11 +449,70 @@ function ExplorerScreen({ me, accessToken, onLogout }) {
         throw new Error(parseApiError("Nie udało się pobrać szczegółów urządzenia", payload));
       }
       setDeviceDetail(payload);
+      setDeviceInterfacesMap((prev) => ({ ...prev, [deviceId]: payload.interfaces || [] }));
     } catch (err) {
       setDeviceDetail(null);
       setDeviceDetailError(err.message || "Błąd pobierania szczegółów");
     } finally {
       setDeviceDetailLoading(false);
+    }
+  };
+
+  const loadRootDevices = async (rootId) => {
+    if (!rootId) {
+      setRootDevices([]);
+      return;
+    }
+    try {
+      const { response, payload } = await request(`/devices?root_id=${rootId}`, {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
+      if (!response.ok) {
+        throw new Error(parseApiError("Nie udało się pobrać urządzeń dla roota", payload));
+      }
+      setRootDevices(payload || []);
+    } catch (_) {
+      setRootDevices([]);
+    }
+  };
+
+  const ensureDeviceInterfaces = async (deviceId) => {
+    if (!deviceId || deviceInterfacesMap[deviceId]) {
+      return;
+    }
+    try {
+      const { response, payload } = await request(`/devices/${deviceId}`, {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
+      if (!response.ok) {
+        return;
+      }
+      setDeviceInterfacesMap((prev) => ({ ...prev, [deviceId]: payload.interfaces || [] }));
+    } catch (_) {
+      // ignore lazy loading errors in wizard
+    }
+  };
+
+  const loadConnections = async (rootId, deviceId) => {
+    if (!rootId || !deviceId) {
+      setConnections([]);
+      return;
+    }
+    setConnectionsLoading(true);
+    setConnectionsError("");
+    try {
+      const { response, payload } = await request(`/connections?root_id=${rootId}&device_id=${deviceId}`, {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
+      if (!response.ok) {
+        throw new Error(parseApiError("Nie udało się pobrać połączeń", payload));
+      }
+      setConnections(payload || []);
+    } catch (err) {
+      setConnections([]);
+      setConnectionsError(err.message || "Błąd pobierania połączeń");
+    } finally {
+      setConnectionsLoading(false);
     }
   };
 
@@ -543,11 +618,44 @@ function ExplorerScreen({ me, accessToken, onLogout }) {
     loadDevices(selectedRootId, currentLocationId);
     setShowDeviceWizard(false);
     setDeviceWizardStep(1);
+    setShowConnectionWizard(false);
   }, [selectedRootId, currentLocationId, accessToken]);
 
   useEffect(() => {
     loadDeviceDetail(selectedDeviceId);
   }, [selectedDeviceId, accessToken]);
+
+  useEffect(() => {
+    setDeviceInterfacesMap({});
+    loadRootDevices(selectedRootId);
+    setNewConnection({
+      fromDeviceId: "",
+      fromInterfaceId: "",
+      toDeviceId: "",
+      toInterfaceId: "",
+      technology: "ETHERNET",
+      vlanId: "",
+      notes: "",
+    });
+  }, [selectedRootId, accessToken]);
+
+  useEffect(() => {
+    loadConnections(selectedRootId, selectedDeviceId);
+  }, [selectedRootId, selectedDeviceId, accessToken]);
+
+  useEffect(() => {
+    if (!newConnection.fromDeviceId) {
+      return;
+    }
+    ensureDeviceInterfaces(newConnection.fromDeviceId);
+  }, [newConnection.fromDeviceId, accessToken]);
+
+  useEffect(() => {
+    if (!newConnection.toDeviceId) {
+      return;
+    }
+    ensureDeviceInterfaces(newConnection.toDeviceId);
+  }, [newConnection.toDeviceId, accessToken]);
 
   const maps = useMemo(() => {
     const byId = new Map();
@@ -616,6 +724,28 @@ function ExplorerScreen({ me, accessToken, onLogout }) {
     }
     return wifiNetworks.filter((network) => network.space_id === wifiFilterSpaceId);
   }, [wifiNetworks, wifiFilterSpaceId]);
+
+  const fromInterfaces = deviceInterfacesMap[newConnection.fromDeviceId] || [];
+  const toInterfaces = deviceInterfacesMap[newConnection.toDeviceId] || [];
+
+  const deviceNameById = useMemo(() => {
+    const map = new Map();
+    for (const device of rootDevices) {
+      map.set(device.id, device.name);
+    }
+    return map;
+  }, [rootDevices]);
+
+  const interfaceNameById = useMemo(() => {
+    const map = new Map();
+    Object.values(deviceInterfacesMap).forEach((interfaces) => {
+      (interfaces || []).forEach((item) => map.set(item.id, item.name));
+    });
+    if (deviceDetail?.interfaces) {
+      deviceDetail.interfaces.forEach((item) => map.set(item.id, item.name));
+    }
+    return map;
+  }, [deviceInterfacesMap, deviceDetail]);
 
   useEffect(() => {
     if (!selectedRootId || spaces.length === 0) {
@@ -847,6 +977,59 @@ function ExplorerScreen({ me, accessToken, onLogout }) {
       setDeviceDetailError(err.message || "Błąd dodawania interfejsu");
     } finally {
       setInterfaceSubmitting(false);
+    }
+  };
+
+  const onCreateConnection = async (event) => {
+    event.preventDefault();
+    if (!selectedRootId) {
+      return;
+    }
+
+    if (!newConnection.fromInterfaceId || !newConnection.toInterfaceId) {
+      setConnectionsError("Wybierz oba interfejsy połączenia");
+      return;
+    }
+
+    setConnectionSubmitting(true);
+    setConnectionsError("");
+    try {
+      const payload = {
+        root_id: selectedRootId,
+        from_interface_id: newConnection.fromInterfaceId,
+        to_interface_id: newConnection.toInterfaceId,
+        technology: newConnection.technology,
+        vlan_id: newConnection.technology === "ETHERNET" ? newConnection.vlanId || null : null,
+        notes: newConnection.notes || null,
+      };
+
+      const { response, payload: responsePayload } = await request("/connections", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify(payload),
+      });
+      if (!response.ok) {
+        throw new Error(parseApiError("Nie udało się utworzyć połączenia", responsePayload));
+      }
+
+      setShowConnectionWizard(false);
+      setNewConnection({
+        fromDeviceId: "",
+        fromInterfaceId: "",
+        toDeviceId: "",
+        toInterfaceId: "",
+        technology: "ETHERNET",
+        vlanId: "",
+        notes: "",
+      });
+      await loadConnections(selectedRootId, selectedDeviceId);
+    } catch (err) {
+      setConnectionsError(err.message || "Błąd tworzenia połączenia");
+    } finally {
+      setConnectionSubmitting(false);
     }
   };
 
@@ -1093,16 +1276,27 @@ function ExplorerScreen({ me, accessToken, onLogout }) {
             <div className="panel-header">
               <h3>Urządzenia w przestrzeni</h3>
               {isAdmin ? (
-                <button
-                  type="button"
-                  className="button-secondary"
-                  onClick={() => {
-                    setShowDeviceWizard((prev) => !prev);
-                    setDeviceWizardStep(1);
-                  }}
-                >
-                  {showDeviceWizard ? "Zamknij kreator" : "Dodaj urządzenie"}
-                </button>
+                <div className="wizard-actions">
+                  <button
+                    type="button"
+                    className="button-secondary"
+                    onClick={() => {
+                      setShowConnectionWizard((prev) => !prev);
+                    }}
+                  >
+                    {showConnectionWizard ? "Zamknij połączenia" : "Dodaj połączenie"}
+                  </button>
+                  <button
+                    type="button"
+                    className="button-secondary"
+                    onClick={() => {
+                      setShowDeviceWizard((prev) => !prev);
+                      setDeviceWizardStep(1);
+                    }}
+                  >
+                    {showDeviceWizard ? "Zamknij kreator" : "Dodaj urządzenie"}
+                  </button>
+                </div>
               ) : null}
             </div>
 
@@ -1192,6 +1386,131 @@ function ExplorerScreen({ me, accessToken, onLogout }) {
               </form>
             ) : null}
 
+            {isAdmin && showConnectionWizard ? (
+              <form className="inline-form" onSubmit={onCreateConnection}>
+                <h4>Wizard: nowe połączenie</h4>
+                <label htmlFor="from-device">FROM urządzenie</label>
+                <select
+                  id="from-device"
+                  value={newConnection.fromDeviceId}
+                  onChange={(event) =>
+                    setNewConnection((prev) => ({
+                      ...prev,
+                      fromDeviceId: event.target.value,
+                      fromInterfaceId: "",
+                    }))
+                  }
+                  required
+                >
+                  <option value="">Wybierz</option>
+                  {rootDevices.map((device) => (
+                    <option key={device.id} value={device.id}>
+                      {device.name}
+                    </option>
+                  ))}
+                </select>
+
+                <label htmlFor="from-interface">FROM interfejs</label>
+                <select
+                  id="from-interface"
+                  value={newConnection.fromInterfaceId}
+                  onChange={(event) => setNewConnection((prev) => ({ ...prev, fromInterfaceId: event.target.value }))}
+                  required
+                >
+                  <option value="">Wybierz</option>
+                  {fromInterfaces.map((item) => (
+                    <option key={item.id} value={item.id}>
+                      {item.name} ({item.type})
+                    </option>
+                  ))}
+                </select>
+
+                <label htmlFor="to-device">TO urządzenie</label>
+                <select
+                  id="to-device"
+                  value={newConnection.toDeviceId}
+                  onChange={(event) =>
+                    setNewConnection((prev) => ({
+                      ...prev,
+                      toDeviceId: event.target.value,
+                      toInterfaceId: "",
+                    }))
+                  }
+                  required
+                >
+                  <option value="">Wybierz</option>
+                  {rootDevices.map((device) => (
+                    <option key={device.id} value={device.id}>
+                      {device.name}
+                    </option>
+                  ))}
+                </select>
+
+                <label htmlFor="to-interface">TO interfejs</label>
+                <select
+                  id="to-interface"
+                  value={newConnection.toInterfaceId}
+                  onChange={(event) => setNewConnection((prev) => ({ ...prev, toInterfaceId: event.target.value }))}
+                  required
+                >
+                  <option value="">Wybierz</option>
+                  {toInterfaces.map((item) => (
+                    <option key={item.id} value={item.id}>
+                      {item.name} ({item.type})
+                    </option>
+                  ))}
+                </select>
+
+                <label htmlFor="conn-tech">Technologia</label>
+                <select
+                  id="conn-tech"
+                  value={newConnection.technology}
+                  onChange={(event) =>
+                    setNewConnection((prev) => ({
+                      ...prev,
+                      technology: event.target.value,
+                      vlanId: event.target.value === "ETHERNET" ? prev.vlanId : "",
+                    }))
+                  }
+                >
+                  <option value="ETHERNET">ETHERNET</option>
+                  <option value="FIBER">FIBER</option>
+                  <option value="WIFI">WIFI</option>
+                  <option value="SERIAL">SERIAL</option>
+                  <option value="OTHER">OTHER</option>
+                </select>
+
+                {newConnection.technology === "ETHERNET" ? (
+                  <>
+                    <label htmlFor="conn-vlan">VLAN</label>
+                    <select
+                      id="conn-vlan"
+                      value={newConnection.vlanId}
+                      onChange={(event) => setNewConnection((prev) => ({ ...prev, vlanId: event.target.value }))}
+                      required
+                    >
+                      <option value="">Wybierz VLAN</option>
+                      {vlans.map((vlan) => (
+                        <option key={vlan.id} value={vlan.id}>
+                          VLAN {vlan.vlan_id} - {vlan.name}
+                        </option>
+                      ))}
+                    </select>
+                  </>
+                ) : null}
+
+                <label htmlFor="conn-notes">Notatki</label>
+                <input
+                  id="conn-notes"
+                  value={newConnection.notes}
+                  onChange={(event) => setNewConnection((prev) => ({ ...prev, notes: event.target.value }))}
+                />
+                <button type="submit" disabled={connectionSubmitting}>
+                  {connectionSubmitting ? "Zapisywanie..." : "Utwórz połączenie"}
+                </button>
+              </form>
+            ) : null}
+
             {selectedDeviceId ? (
               <div className="device-detail">
                 <h4>Szczegóły urządzenia</h4>
@@ -1225,6 +1544,29 @@ function ExplorerScreen({ me, accessToken, onLogout }) {
                             <strong>{item.name}</strong> ({item.type}) {item.mac ? `- ${item.mac}` : ""}
                           </li>
                         ))}
+                      </ul>
+                    ) : null}
+
+                    <h4>Połączenia in/out</h4>
+                    {connectionsLoading ? <p>Ładowanie połączeń...</p> : null}
+                    {connectionsError ? <p className="error">{connectionsError}</p> : null}
+                    {!connectionsLoading && connections.length === 0 ? <p>Brak połączeń dla urządzenia.</p> : null}
+                    {!connectionsLoading && connections.length > 0 ? (
+                      <ul className="simple-list">
+                        {connections.map((connection) => {
+                          const outgoing = connection.from_device_id === selectedDeviceId;
+                          const peerDeviceId = outgoing ? connection.to_device_id : connection.from_device_id;
+                          const fromName = interfaceNameById.get(connection.from_interface_id) || connection.from_interface_id;
+                          const toName = interfaceNameById.get(connection.to_interface_id) || connection.to_interface_id;
+                          return (
+                            <li key={connection.id}>
+                              <strong>{outgoing ? "OUT" : "IN"}</strong> [{connection.technology}] {fromName}
+                              {" -> "}
+                              {toName}
+                              <span className="muted"> ({deviceNameById.get(peerDeviceId) || peerDeviceId})</span>
+                            </li>
+                          );
+                        })}
                       </ul>
                     ) : null}
 
