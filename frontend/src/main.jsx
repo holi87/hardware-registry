@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import "./styles.css";
 
@@ -263,6 +263,21 @@ function ExplorerScreen({ me, accessToken, onLogout }) {
   const [vlansError, setVlansError] = useState("");
   const [vlanSubmitting, setVlanSubmitting] = useState(false);
   const [newVlan, setNewVlan] = useState({ vlanId: "", name: "", notes: "" });
+  const [wifiNetworks, setWifiNetworks] = useState([]);
+  const [wifiLoading, setWifiLoading] = useState(false);
+  const [wifiError, setWifiError] = useState("");
+  const [wifiFilterSpaceId, setWifiFilterSpaceId] = useState("all");
+  const [wifiSubmitting, setWifiSubmitting] = useState(false);
+  const [newWifi, setNewWifi] = useState({
+    ssid: "",
+    password: "",
+    security: "WPA2",
+    spaceId: "",
+    vlanId: "",
+    notes: "",
+  });
+  const [revealedPasswords, setRevealedPasswords] = useState({});
+  const hideTimersRef = useRef(new Map());
 
   const isAdmin = me.role === "ADMIN";
 
@@ -318,6 +333,38 @@ function ExplorerScreen({ me, accessToken, onLogout }) {
       setVlansError(err.message || "Błąd pobierania VLAN");
     } finally {
       setVlansLoading(false);
+    }
+  };
+
+  const clearRevealedPasswords = () => {
+    for (const timeoutId of hideTimersRef.current.values()) {
+      clearTimeout(timeoutId);
+    }
+    hideTimersRef.current.clear();
+    setRevealedPasswords({});
+  };
+
+  const loadWifi = async (rootId) => {
+    if (!rootId) {
+      setWifiNetworks([]);
+      return;
+    }
+
+    setWifiLoading(true);
+    setWifiError("");
+    try {
+      const { response, payload } = await request(`/wifi?root_id=${rootId}`, {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
+      if (!response.ok) {
+        throw new Error(parseApiError("Nie udało się pobrać listy Wi-Fi", payload));
+      }
+      setWifiNetworks(payload || []);
+    } catch (err) {
+      setWifiNetworks([]);
+      setWifiError(err.message || "Błąd pobierania Wi-Fi");
+    } finally {
+      setWifiLoading(false);
     }
   };
 
@@ -410,6 +457,15 @@ function ExplorerScreen({ me, accessToken, onLogout }) {
     loadVlans(selectedRootId);
   }, [selectedRootId, accessToken]);
 
+  useEffect(() => {
+    clearRevealedPasswords();
+    setWifiFilterSpaceId("all");
+    setNewWifi((prev) => ({ ...prev, spaceId: "", vlanId: "" }));
+    loadWifi(selectedRootId);
+  }, [selectedRootId, accessToken]);
+
+  useEffect(() => () => clearRevealedPasswords(), []);
+
   const maps = useMemo(() => {
     const byId = new Map();
     const parentById = new Map();
@@ -460,6 +516,37 @@ function ExplorerScreen({ me, accessToken, onLogout }) {
     return list.reverse();
   }, [currentNode, maps]);
 
+  const spaces = useMemo(() => {
+    const items = [];
+    for (const node of maps.byId.values()) {
+      if (selectedRootId && node.root_id !== selectedRootId) {
+        continue;
+      }
+      items.push(node);
+    }
+    return items.sort((a, b) => a.name.localeCompare(b.name, "pl"));
+  }, [maps, selectedRootId]);
+
+  const filteredWifiNetworks = useMemo(() => {
+    if (wifiFilterSpaceId === "all") {
+      return wifiNetworks;
+    }
+    return wifiNetworks.filter((network) => network.space_id === wifiFilterSpaceId);
+  }, [wifiNetworks, wifiFilterSpaceId]);
+
+  useEffect(() => {
+    if (!selectedRootId || spaces.length === 0) {
+      return;
+    }
+    setNewWifi((prev) => {
+      if (prev.spaceId && spaces.some((space) => space.id === prev.spaceId)) {
+        return prev;
+      }
+      const fallbackId = spaces.find((space) => space.id === currentLocationId)?.id || spaces[0].id;
+      return { ...prev, spaceId: fallbackId };
+    });
+  }, [selectedRootId, spaces, currentLocationId]);
+
   const onRootChange = (event) => {
     const rootId = event.target.value;
     setSelectedRootId(rootId);
@@ -505,6 +592,97 @@ function ExplorerScreen({ me, accessToken, onLogout }) {
       setVlansError(err.message || "Błąd tworzenia VLAN");
     } finally {
       setVlanSubmitting(false);
+    }
+  };
+
+  const onCreateWifi = async (event) => {
+    event.preventDefault();
+    if (!selectedRootId) {
+      return;
+    }
+    if (!newWifi.spaceId) {
+      setWifiError("Wybierz przestrzeń dla sieci Wi-Fi");
+      return;
+    }
+
+    setWifiSubmitting(true);
+    setWifiError("");
+    try {
+      const { response, payload } = await request("/wifi", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify({
+          root_id: selectedRootId,
+          space_id: newWifi.spaceId,
+          ssid: newWifi.ssid,
+          password: newWifi.password,
+          security: newWifi.security,
+          vlan_id: newWifi.vlanId || null,
+          notes: newWifi.notes || null,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(parseApiError("Nie udało się dodać sieci Wi-Fi", payload));
+      }
+
+      setNewWifi((prev) => ({
+        ...prev,
+        ssid: "",
+        password: "",
+        notes: "",
+        vlanId: "",
+      }));
+      await loadWifi(selectedRootId);
+    } catch (err) {
+      setWifiError(err.message || "Błąd tworzenia Wi-Fi");
+    } finally {
+      setWifiSubmitting(false);
+    }
+  };
+
+  const onRevealWifi = async (wifiId) => {
+    setWifiError("");
+    try {
+      const { response, payload } = await request(`/wifi/${wifiId}/reveal`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
+      if (!response.ok) {
+        throw new Error(parseApiError("Nie udało się odsłonić hasła", payload));
+      }
+
+      if (hideTimersRef.current.has(wifiId)) {
+        clearTimeout(hideTimersRef.current.get(wifiId));
+      }
+
+      setRevealedPasswords((prev) => ({ ...prev, [wifiId]: payload.password }));
+      const timeoutId = setTimeout(() => {
+        setRevealedPasswords((prev) => {
+          const copy = { ...prev };
+          delete copy[wifiId];
+          return copy;
+        });
+        hideTimersRef.current.delete(wifiId);
+      }, 30_000);
+      hideTimersRef.current.set(wifiId, timeoutId);
+    } catch (err) {
+      setWifiError(err.message || "Błąd odsłaniania hasła");
+    }
+  };
+
+  const onCopyPassword = async (wifiId) => {
+    const value = revealedPasswords[wifiId];
+    if (!value) {
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(value);
+    } catch (_) {
+      setWifiError("Nie udało się skopiować hasła");
     }
   };
 
@@ -616,6 +794,132 @@ function ExplorerScreen({ me, accessToken, onLogout }) {
                 />
                 <button type="submit" disabled={vlanSubmitting}>
                   {vlanSubmitting ? "Zapisywanie..." : "Dodaj VLAN"}
+                </button>
+              </form>
+            ) : null}
+          </section>
+
+          <section className="subpanel">
+            <h3>Wi-Fi</h3>
+            <div className="field">
+              <label htmlFor="wifi-space-filter">Filtruj po przestrzeni</label>
+              <select
+                id="wifi-space-filter"
+                value={wifiFilterSpaceId}
+                onChange={(event) => setWifiFilterSpaceId(event.target.value)}
+              >
+                <option value="all">Wszystkie przestrzenie</option>
+                {spaces.map((space) => (
+                  <option key={space.id} value={space.id}>
+                    {space.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {wifiLoading ? <p>Ładowanie Wi-Fi...</p> : null}
+            {wifiError ? <p className="error">{wifiError}</p> : null}
+            {!wifiLoading && filteredWifiNetworks.length === 0 ? <p>Brak sieci Wi-Fi w tym roocie.</p> : null}
+
+            {!wifiLoading && filteredWifiNetworks.length > 0 ? (
+              <div className="wifi-list">
+                {filteredWifiNetworks.map((network) => {
+                  const revealed = revealedPasswords[network.id];
+                  const spaceName = maps.byId.get(network.space_id)?.name || "Nieznana przestrzeń";
+                  return (
+                    <article key={network.id} className="wifi-card">
+                      <div>
+                        <h4>{network.ssid}</h4>
+                        <p className="muted">
+                          {network.security} | {spaceName}
+                        </p>
+                      </div>
+                      <p className="wifi-password">{revealed ? revealed : "••••••••••••"}</p>
+                      <div className="wifi-actions">
+                        <button type="button" onClick={() => onRevealWifi(network.id)}>
+                          Pokaż hasło
+                        </button>
+                        <button
+                          type="button"
+                          className="button-secondary"
+                          onClick={() => onCopyPassword(network.id)}
+                          disabled={!revealed}
+                        >
+                          Kopiuj hasło
+                        </button>
+                      </div>
+                    </article>
+                  );
+                })}
+              </div>
+            ) : null}
+
+            {isAdmin ? (
+              <form className="inline-form" onSubmit={onCreateWifi}>
+                <h4>Dodaj sieć Wi-Fi</h4>
+                <label htmlFor="wifi-ssid">SSID</label>
+                <input
+                  id="wifi-ssid"
+                  value={newWifi.ssid}
+                  onChange={(event) => setNewWifi((prev) => ({ ...prev, ssid: event.target.value }))}
+                  required
+                />
+
+                <label htmlFor="wifi-password">Hasło</label>
+                <input
+                  id="wifi-password"
+                  type="password"
+                  value={newWifi.password}
+                  onChange={(event) => setNewWifi((prev) => ({ ...prev, password: event.target.value }))}
+                  required
+                />
+
+                <label htmlFor="wifi-security">Security</label>
+                <input
+                  id="wifi-security"
+                  value={newWifi.security}
+                  onChange={(event) => setNewWifi((prev) => ({ ...prev, security: event.target.value }))}
+                  required
+                />
+
+                <label htmlFor="wifi-space">Przestrzeń</label>
+                <select
+                  id="wifi-space"
+                  value={newWifi.spaceId}
+                  onChange={(event) => setNewWifi((prev) => ({ ...prev, spaceId: event.target.value }))}
+                  required
+                >
+                  <option value="">Wybierz</option>
+                  {spaces.map((space) => (
+                    <option key={space.id} value={space.id}>
+                      {space.name}
+                    </option>
+                  ))}
+                </select>
+
+                <label htmlFor="wifi-vlan">VLAN (opcjonalnie)</label>
+                <select
+                  id="wifi-vlan"
+                  value={newWifi.vlanId}
+                  onChange={(event) => setNewWifi((prev) => ({ ...prev, vlanId: event.target.value }))}
+                >
+                  <option value="">Brak</option>
+                  {vlans.map((vlan) => (
+                    <option key={vlan.id} value={vlan.id}>
+                      VLAN {vlan.vlan_id} - {vlan.name}
+                    </option>
+                  ))}
+                </select>
+
+                <label htmlFor="wifi-notes">Notatki</label>
+                <input
+                  id="wifi-notes"
+                  value={newWifi.notes}
+                  onChange={(event) => setNewWifi((prev) => ({ ...prev, notes: event.target.value }))}
+                />
+
+                <button type="submit" disabled={wifiSubmitting}>
+                  {wifiSubmitting ? "Zapisywanie..." : "Dodaj Wi-Fi"}
                 </button>
               </form>
             ) : null}

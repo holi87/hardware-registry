@@ -158,6 +158,37 @@ button:disabled {
   margin: 0 0 0.5rem;
 }
 
+.wifi-list {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.wifi-card {
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 0.75rem;
+  background: #f8fafc;
+  display: grid;
+  gap: 0.5rem;
+}
+
+.wifi-card h4 {
+  margin: 0 0 0.2rem;
+}
+
+.wifi-password {
+  margin: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.95rem;
+  letter-spacing: 0.4px;
+}
+
+.wifi-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
 .tile {
   text-align: left;
   background: linear-gradient(180deg, #eff6ff, #dbeafe);
