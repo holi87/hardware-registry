@@ -5,12 +5,13 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.api.deps import require_admin, require_user
 from app.api.root_access import ensure_root_exists, get_accessible_root_ids, require_root_access
 from app.db.session import get_db
+from app.models.device import Device
 from app.models.location import Location
 from app.models.user import User
 
@@ -86,7 +87,7 @@ def _creates_cycle(db: Session, location_id: UUID, new_parent_id: UUID | None) -
     return False
 
 
-def _build_tree(locations: list[Location], root_id: UUID) -> LocationTreeNode:
+def _build_tree(locations: list[Location], root_id: UUID, device_counts: dict[UUID, int]) -> LocationTreeNode:
     nodes = {
         location.id: LocationTreeNode(
             id=location.id,
@@ -95,7 +96,7 @@ def _build_tree(locations: list[Location], root_id: UUID) -> LocationTreeNode:
             root_id=location.root_id,
             notes=location.notes,
             created_at=location.created_at,
-            device_count=0,
+            device_count=device_counts.get(location.id, 0),
             children=[],
         )
         for location in locations
@@ -149,7 +150,14 @@ def locations_tree(
     if not locations:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Root tree not found")
 
-    return _build_tree(locations, root_id)
+    counts = db.execute(
+        select(Device.space_id, func.count(Device.id))
+        .where(Device.root_id == root_id)
+        .group_by(Device.space_id)
+    ).all()
+    device_counts = {space_id: count for space_id, count in counts}
+
+    return _build_tree(locations, root_id, device_counts)
 
 
 @router.post("/locations", response_model=LocationSummary, status_code=status.HTTP_201_CREATED)

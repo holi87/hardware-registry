@@ -278,6 +278,26 @@ function ExplorerScreen({ me, accessToken, onLogout }) {
   });
   const [revealedPasswords, setRevealedPasswords] = useState({});
   const hideTimersRef = useRef(new Map());
+  const [devices, setDevices] = useState([]);
+  const [devicesLoading, setDevicesLoading] = useState(false);
+  const [devicesError, setDevicesError] = useState("");
+  const [selectedDeviceId, setSelectedDeviceId] = useState("");
+  const [deviceDetail, setDeviceDetail] = useState(null);
+  const [deviceDetailLoading, setDeviceDetailLoading] = useState(false);
+  const [deviceDetailError, setDeviceDetailError] = useState("");
+  const [showDeviceWizard, setShowDeviceWizard] = useState(false);
+  const [deviceWizardStep, setDeviceWizardStep] = useState(1);
+  const [deviceSubmitting, setDeviceSubmitting] = useState(false);
+  const [newDevice, setNewDevice] = useState({
+    name: "",
+    type: "",
+    vendor: "",
+    model: "",
+    serial: "",
+    notes: "",
+  });
+  const [interfaceSubmitting, setInterfaceSubmitting] = useState(false);
+  const [newInterface, setNewInterface] = useState({ name: "", type: "", mac: "", notes: "" });
 
   const isAdmin = me.role === "ADMIN";
 
@@ -365,6 +385,59 @@ function ExplorerScreen({ me, accessToken, onLogout }) {
       setWifiError(err.message || "Błąd pobierania Wi-Fi");
     } finally {
       setWifiLoading(false);
+    }
+  };
+
+  const loadDevices = async (rootId, spaceId) => {
+    if (!rootId || !spaceId) {
+      setDevices([]);
+      setSelectedDeviceId("");
+      return;
+    }
+
+    setDevicesLoading(true);
+    setDevicesError("");
+    try {
+      const { response, payload } = await request(`/devices?root_id=${rootId}&space_id=${spaceId}`, {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
+      if (!response.ok) {
+        throw new Error(parseApiError("Nie udało się pobrać urządzeń", payload));
+      }
+      const list = payload || [];
+      setDevices(list);
+      setSelectedDeviceId((prev) => (prev && list.some((item) => item.id === prev) ? prev : list[0]?.id || ""));
+    } catch (err) {
+      setDevices([]);
+      setSelectedDeviceId("");
+      setDevicesError(err.message || "Błąd pobierania urządzeń");
+    } finally {
+      setDevicesLoading(false);
+    }
+  };
+
+  const loadDeviceDetail = async (deviceId) => {
+    if (!deviceId) {
+      setDeviceDetail(null);
+      setDeviceDetailError("");
+      return;
+    }
+
+    setDeviceDetailLoading(true);
+    setDeviceDetailError("");
+    try {
+      const { response, payload } = await request(`/devices/${deviceId}`, {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
+      if (!response.ok) {
+        throw new Error(parseApiError("Nie udało się pobrać szczegółów urządzenia", payload));
+      }
+      setDeviceDetail(payload);
+    } catch (err) {
+      setDeviceDetail(null);
+      setDeviceDetailError(err.message || "Błąd pobierania szczegółów");
+    } finally {
+      setDeviceDetailLoading(false);
     }
   };
 
@@ -465,6 +538,16 @@ function ExplorerScreen({ me, accessToken, onLogout }) {
   }, [selectedRootId, accessToken]);
 
   useEffect(() => () => clearRevealedPasswords(), []);
+
+  useEffect(() => {
+    loadDevices(selectedRootId, currentLocationId);
+    setShowDeviceWizard(false);
+    setDeviceWizardStep(1);
+  }, [selectedRootId, currentLocationId, accessToken]);
+
+  useEffect(() => {
+    loadDeviceDetail(selectedDeviceId);
+  }, [selectedDeviceId, accessToken]);
 
   const maps = useMemo(() => {
     const byId = new Map();
@@ -683,6 +766,87 @@ function ExplorerScreen({ me, accessToken, onLogout }) {
       await navigator.clipboard.writeText(value);
     } catch (_) {
       setWifiError("Nie udało się skopiować hasła");
+    }
+  };
+
+  const onCreateDevice = async (event) => {
+    event.preventDefault();
+    if (!selectedRootId || !currentLocationId) {
+      return;
+    }
+
+    setDeviceSubmitting(true);
+    setDevicesError("");
+    try {
+      const { response, payload } = await request("/devices", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify({
+          root_id: selectedRootId,
+          space_id: currentLocationId,
+          name: newDevice.name,
+          type: newDevice.type,
+          vendor: newDevice.vendor || null,
+          model: newDevice.model || null,
+          serial: newDevice.serial || null,
+          notes: newDevice.notes || null,
+        }),
+      });
+      if (!response.ok) {
+        throw new Error(parseApiError("Nie udało się dodać urządzenia", payload));
+      }
+
+      setShowDeviceWizard(false);
+      setDeviceWizardStep(1);
+      setNewDevice({ name: "", type: "", vendor: "", model: "", serial: "", notes: "" });
+      await loadDevices(selectedRootId, currentLocationId);
+      if (payload?.id) {
+        setSelectedDeviceId(payload.id);
+      }
+      const treeData = await loadTree(selectedRootId);
+      setTree(treeData);
+    } catch (err) {
+      setDevicesError(err.message || "Błąd dodawania urządzenia");
+    } finally {
+      setDeviceSubmitting(false);
+    }
+  };
+
+  const onCreateInterface = async (event) => {
+    event.preventDefault();
+    if (!selectedDeviceId) {
+      return;
+    }
+
+    setInterfaceSubmitting(true);
+    setDeviceDetailError("");
+    try {
+      const { response, payload } = await request(`/devices/${selectedDeviceId}/interfaces`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify({
+          name: newInterface.name,
+          type: newInterface.type,
+          mac: newInterface.mac || null,
+          notes: newInterface.notes || null,
+        }),
+      });
+      if (!response.ok) {
+        throw new Error(parseApiError("Nie udało się dodać interfejsu", payload));
+      }
+
+      setNewInterface({ name: "", type: "", mac: "", notes: "" });
+      await loadDeviceDetail(selectedDeviceId);
+    } catch (err) {
+      setDeviceDetailError(err.message || "Błąd dodawania interfejsu");
+    } finally {
+      setInterfaceSubmitting(false);
     }
   };
 
@@ -922,6 +1086,187 @@ function ExplorerScreen({ me, accessToken, onLogout }) {
                   {wifiSubmitting ? "Zapisywanie..." : "Dodaj Wi-Fi"}
                 </button>
               </form>
+            ) : null}
+          </section>
+
+          <section className="subpanel">
+            <div className="panel-header">
+              <h3>Urządzenia w przestrzeni</h3>
+              {isAdmin ? (
+                <button
+                  type="button"
+                  className="button-secondary"
+                  onClick={() => {
+                    setShowDeviceWizard((prev) => !prev);
+                    setDeviceWizardStep(1);
+                  }}
+                >
+                  {showDeviceWizard ? "Zamknij kreator" : "Dodaj urządzenie"}
+                </button>
+              ) : null}
+            </div>
+
+            {devicesLoading ? <p>Ładowanie urządzeń...</p> : null}
+            {devicesError ? <p className="error">{devicesError}</p> : null}
+            {!devicesLoading && devices.length === 0 ? <p>Brak urządzeń w tej przestrzeni.</p> : null}
+            {!devicesLoading && devices.length > 0 ? (
+              <div className="device-list">
+                {devices.map((device) => (
+                  <button
+                    key={device.id}
+                    type="button"
+                    className={`device-item ${selectedDeviceId === device.id ? "is-active" : ""}`}
+                    onClick={() => setSelectedDeviceId(device.id)}
+                  >
+                    <strong>{device.name}</strong>
+                    <span className="muted">{device.type}</span>
+                  </button>
+                ))}
+              </div>
+            ) : null}
+
+            {isAdmin && showDeviceWizard ? (
+              <form className="inline-form" onSubmit={onCreateDevice}>
+                <h4>Wizard: nowe urządzenie</h4>
+                {deviceWizardStep === 1 ? (
+                  <>
+                    <label htmlFor="device-name">Nazwa urządzenia</label>
+                    <input
+                      id="device-name"
+                      value={newDevice.name}
+                      onChange={(event) => setNewDevice((prev) => ({ ...prev, name: event.target.value }))}
+                      required
+                    />
+                    <label htmlFor="device-type">Typ</label>
+                    <input
+                      id="device-type"
+                      value={newDevice.type}
+                      onChange={(event) => setNewDevice((prev) => ({ ...prev, type: event.target.value }))}
+                      placeholder="router / switch / sensor..."
+                      required
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setDeviceWizardStep(2)}
+                      disabled={!newDevice.name || !newDevice.type}
+                    >
+                      Dalej
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <label htmlFor="device-vendor">Vendor</label>
+                    <input
+                      id="device-vendor"
+                      value={newDevice.vendor}
+                      onChange={(event) => setNewDevice((prev) => ({ ...prev, vendor: event.target.value }))}
+                    />
+                    <label htmlFor="device-model">Model</label>
+                    <input
+                      id="device-model"
+                      value={newDevice.model}
+                      onChange={(event) => setNewDevice((prev) => ({ ...prev, model: event.target.value }))}
+                    />
+                    <label htmlFor="device-serial">Serial</label>
+                    <input
+                      id="device-serial"
+                      value={newDevice.serial}
+                      onChange={(event) => setNewDevice((prev) => ({ ...prev, serial: event.target.value }))}
+                    />
+                    <label htmlFor="device-notes">Notatki</label>
+                    <input
+                      id="device-notes"
+                      value={newDevice.notes}
+                      onChange={(event) => setNewDevice((prev) => ({ ...prev, notes: event.target.value }))}
+                    />
+                    <div className="wizard-actions">
+                      <button type="button" className="button-secondary" onClick={() => setDeviceWizardStep(1)}>
+                        Wstecz
+                      </button>
+                      <button type="submit" disabled={deviceSubmitting}>
+                        {deviceSubmitting ? "Zapisywanie..." : "Utwórz urządzenie"}
+                      </button>
+                    </div>
+                  </>
+                )}
+              </form>
+            ) : null}
+
+            {selectedDeviceId ? (
+              <div className="device-detail">
+                <h4>Szczegóły urządzenia</h4>
+                {deviceDetailLoading ? <p>Ładowanie szczegółów...</p> : null}
+                {deviceDetailError ? <p className="error">{deviceDetailError}</p> : null}
+                {deviceDetail ? (
+                  <>
+                    <div className="detail-grid">
+                      <p>
+                        <strong>Nazwa:</strong> {deviceDetail.name}
+                      </p>
+                      <p>
+                        <strong>Typ:</strong> {deviceDetail.type}
+                      </p>
+                      <p>
+                        <strong>Vendor:</strong> {deviceDetail.vendor || "-"}
+                      </p>
+                      <p>
+                        <strong>Model:</strong> {deviceDetail.model || "-"}
+                      </p>
+                      <p>
+                        <strong>Serial:</strong> {deviceDetail.serial || "-"}
+                      </p>
+                    </div>
+                    <h4>Interfejsy</h4>
+                    {deviceDetail.interfaces.length === 0 ? <p>Brak interfejsów.</p> : null}
+                    {deviceDetail.interfaces.length > 0 ? (
+                      <ul className="simple-list">
+                        {deviceDetail.interfaces.map((item) => (
+                          <li key={item.id}>
+                            <strong>{item.name}</strong> ({item.type}) {item.mac ? `- ${item.mac}` : ""}
+                          </li>
+                        ))}
+                      </ul>
+                    ) : null}
+
+                    {isAdmin ? (
+                      <form className="inline-form" onSubmit={onCreateInterface}>
+                        <h4>Dodaj interfejs</h4>
+                        <label htmlFor="int-name">Nazwa</label>
+                        <input
+                          id="int-name"
+                          value={newInterface.name}
+                          onChange={(event) => setNewInterface((prev) => ({ ...prev, name: event.target.value }))}
+                          placeholder="eth0"
+                          required
+                        />
+                        <label htmlFor="int-type">Typ</label>
+                        <input
+                          id="int-type"
+                          value={newInterface.type}
+                          onChange={(event) => setNewInterface((prev) => ({ ...prev, type: event.target.value }))}
+                          placeholder="ethernet"
+                          required
+                        />
+                        <label htmlFor="int-mac">MAC</label>
+                        <input
+                          id="int-mac"
+                          value={newInterface.mac}
+                          onChange={(event) => setNewInterface((prev) => ({ ...prev, mac: event.target.value }))}
+                        />
+                        <label htmlFor="int-notes">Notatki</label>
+                        <input
+                          id="int-notes"
+                          value={newInterface.notes}
+                          onChange={(event) => setNewInterface((prev) => ({ ...prev, notes: event.target.value }))}
+                        />
+                        <button type="submit" disabled={interfaceSubmitting}>
+                          {interfaceSubmitting ? "Dodawanie..." : "Dodaj interfejs"}
+                        </button>
+                      </form>
+                    ) : null}
+                  </>
+                ) : null}
+              </div>
             ) : null}
           </section>
         </>
