@@ -56,7 +56,8 @@ function SetupAdminScreen({ onSetupDone }) {
   };
 
   return (
-    <section className="panel">
+    <>
+      <section className="panel">
       <h2>Utwórz admina</h2>
       <p>Pierwsze uruchomienie systemu. Skonfiguruj konto administratora.</p>
       <form onSubmit={onSubmit}>
@@ -85,7 +86,63 @@ function SetupAdminScreen({ onSetupDone }) {
         </button>
       </form>
       {error ? <p className="error">{error}</p> : null}
-    </section>
+      </section>
+
+      {isAdmin ? (
+        <div className="fab-wrap">
+          {fabOpen ? (
+            <div className="fab-menu">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowDeviceWizard(true);
+                  setShowConnectionWizard(false);
+                  setDeviceWizardStep(1);
+                  setFabOpen(false);
+                }}
+              >
+                + Urządzenie
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowConnectionWizard(true);
+                  setShowDeviceWizard(false);
+                  setFabOpen(false);
+                }}
+              >
+                + Połączenie
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  pushToast("Użyj sekcji Secrets w szczegółach urządzenia");
+                  setFabOpen(false);
+                }}
+              >
+                + Sekret
+              </button>
+            </div>
+          ) : null}
+          <button
+            type="button"
+            className="fab-toggle"
+            onClick={() => setFabOpen((prev) => !prev)}
+            aria-label="Szybkie akcje"
+          >
+            +
+          </button>
+        </div>
+      ) : null}
+
+      <div className="toast-stack" aria-live="polite">
+        {toasts.map((toast) => (
+          <div key={toast.id} className={`toast ${toast.type}`}>
+            {toast.message}
+          </div>
+        ))}
+      </div>
+    </>
   );
 }
 
@@ -335,6 +392,9 @@ function ExplorerScreen({ me, accessToken, onLogout }) {
     value: "",
     notes: "",
   });
+  const [toasts, setToasts] = useState([]);
+  const toastTimersRef = useRef(new Map());
+  const [fabOpen, setFabOpen] = useState(false);
 
   const isAdmin = me.role === "ADMIN";
 
@@ -584,6 +644,24 @@ function ExplorerScreen({ me, accessToken, onLogout }) {
     }
   };
 
+  const pushToast = (message, type = "success") => {
+    const id = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    setToasts((prev) => [...prev, { id, message, type }]);
+    const timerId = setTimeout(() => {
+      setToasts((prev) => prev.filter((item) => item.id !== id));
+      toastTimersRef.current.delete(id);
+    }, 3200);
+    toastTimersRef.current.set(id, timerId);
+  };
+
+  const clearToasts = () => {
+    for (const timerId of toastTimersRef.current.values()) {
+      clearTimeout(timerId);
+    }
+    toastTimersRef.current.clear();
+    setToasts([]);
+  };
+
   useEffect(() => {
     let mounted = true;
 
@@ -680,7 +758,19 @@ function ExplorerScreen({ me, accessToken, onLogout }) {
     loadWifi(selectedRootId);
   }, [selectedRootId, accessToken]);
 
-  useEffect(() => () => clearRevealedPasswords(), []);
+  useEffect(() => {
+    const onVisibilityChange = () => {
+      if (document.hidden) {
+        clearRevealedPasswords();
+      }
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      clearRevealedPasswords();
+      clearToasts();
+    };
+  }, []);
 
   useEffect(() => {
     loadDevices(selectedRootId, currentLocationId);
@@ -1005,6 +1095,7 @@ function ExplorerScreen({ me, accessToken, onLogout }) {
 
       setNewVlan({ vlanId: "", name: "", notes: "" });
       await loadVlans(selectedRootId);
+      pushToast("VLAN został utworzony");
     } catch (err) {
       setVlansError(err.message || "Błąd tworzenia VLAN");
     } finally {
@@ -1054,6 +1145,7 @@ function ExplorerScreen({ me, accessToken, onLogout }) {
         vlanId: "",
       }));
       await loadWifi(selectedRootId);
+      pushToast("Sieć Wi-Fi została dodana");
     } catch (err) {
       setWifiError(err.message || "Błąd tworzenia Wi-Fi");
     } finally {
@@ -1086,6 +1178,7 @@ function ExplorerScreen({ me, accessToken, onLogout }) {
         hideTimersRef.current.delete(wifiId);
       }, 30_000);
       hideTimersRef.current.set(wifiId, timeoutId);
+      pushToast("Hasło Wi-Fi odsłonięte na 30 sekund");
     } catch (err) {
       setWifiError(err.message || "Błąd odsłaniania hasła");
     }
@@ -1098,6 +1191,7 @@ function ExplorerScreen({ me, accessToken, onLogout }) {
     }
     try {
       await navigator.clipboard.writeText(value);
+      pushToast("Hasło skopiowane do schowka");
     } catch (_) {
       setWifiError("Nie udało się skopiować hasła");
     }
@@ -1142,6 +1236,7 @@ function ExplorerScreen({ me, accessToken, onLogout }) {
       }
       const treeData = await loadTree(selectedRootId);
       setTree(treeData);
+      pushToast("Urządzenie zostało dodane");
     } catch (err) {
       setDevicesError(err.message || "Błąd dodawania urządzenia");
     } finally {
@@ -1177,6 +1272,7 @@ function ExplorerScreen({ me, accessToken, onLogout }) {
 
       setNewInterface({ name: "", type: "", mac: "", notes: "" });
       await loadDeviceDetail(selectedDeviceId);
+      pushToast("Interfejs został dodany");
     } catch (err) {
       setDeviceDetailError(err.message || "Błąd dodawania interfejsu");
     } finally {
@@ -1230,6 +1326,7 @@ function ExplorerScreen({ me, accessToken, onLogout }) {
         notes: "",
       });
       await loadConnections(selectedRootId, selectedDeviceId);
+      pushToast("Połączenie zostało utworzone");
     } catch (err) {
       setConnectionsError(err.message || "Błąd tworzenia połączenia");
     } finally {
@@ -1290,6 +1387,7 @@ function ExplorerScreen({ me, accessToken, onLogout }) {
       }
       setNewSecret({ type: "PASSWORD", name: "", value: "", notes: "" });
       await loadSecrets(selectedRootId);
+      pushToast("Sekret został zapisany");
     } catch (err) {
       setSecretsError(err.message || "Błąd dodawania sekretu");
     } finally {
@@ -1308,6 +1406,7 @@ function ExplorerScreen({ me, accessToken, onLogout }) {
         throw new Error(parseApiError("Nie udało się odsłonić sekretu", payload));
       }
       setRevealedSecrets((prev) => ({ ...prev, [secretId]: payload.value }));
+      pushToast("Sekret został odsłonięty");
     } catch (err) {
       setSecretsError(err.message || "Błąd reveal sekretu");
     }

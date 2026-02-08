@@ -250,9 +250,70 @@ button:disabled {
   overflow: hidden;
 }
 
+.fab-wrap {
+  position: fixed;
+  right: 1rem;
+  bottom: 1rem;
+  z-index: 50;
+}
+
+.fab-toggle {
+  width: 56px;
+  height: 56px;
+  border-radius: 999px;
+  font-size: 1.8rem;
+  line-height: 1;
+  padding: 0;
+  box-shadow: 0 12px 20px rgba(15, 23, 42, 0.3);
+}
+
+.fab-menu {
+  display: grid;
+  gap: 0.45rem;
+  margin-bottom: 0.5rem;
+}
+
+.fab-menu button {
+  box-shadow: 0 8px 16px rgba(15, 23, 42, 0.25);
+}
+
+.toast-stack {
+  position: fixed;
+  left: 1rem;
+  bottom: 1rem;
+  z-index: 60;
+  display: grid;
+  gap: 0.45rem;
+}
+
+.toast {
+  background: #0f172a;
+  color: #f8fafc;
+  padding: 0.65rem 0.85rem;
+  border-radius: 10px;
+  box-shadow: 0 8px 14px rgba(15, 23, 42, 0.25);
+  max-width: min(92vw, 340px);
+  font-size: 0.9rem;
+}
+
 @media (max-width: 640px) {
   .graph-search {
     grid-template-columns: 1fr;
+  }
+
+  .fab-wrap {
+    right: 0.75rem;
+    bottom: 0.75rem;
+  }
+
+  .toast-stack {
+    left: 0.7rem;
+    right: 0.7rem;
+    bottom: 0.7rem;
+  }
+
+  .toast {
+    max-width: 100%;
   }
 }
 
