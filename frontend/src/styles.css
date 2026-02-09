@@ -207,37 +207,18 @@ button:disabled {
   margin: 0;
 }
 
-.top-menu {
-  border: 1px solid var(--line);
-  border-radius: 14px;
-  padding: 0.85rem;
-  background: var(--surface-soft);
-  display: grid;
-  gap: 0.7rem;
-}
-
-.top-menu-group {
-  display: grid;
-  gap: 0.4rem;
-}
-
-.top-menu-title {
-  margin: 0;
-  color: var(--muted);
-  font-size: 0.82rem;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-
-.top-menu-buttons {
+.top-menu-main {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.45rem;
+  gap: 0.5rem;
+  padding: 0.45rem;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface-soft);
 }
 
 .menu-btn {
-  text-align: center;
+  text-align: left;
   background: #ffffff;
   border: 1px solid var(--line);
   color: var(--text);
@@ -247,7 +228,7 @@ button:disabled {
   min-height: 40px;
   width: auto;
   white-space: nowrap;
-  padding: 0.55rem 0.85rem;
+  padding: 0.55rem 1.05rem;
 }
 
 .menu-btn.active {

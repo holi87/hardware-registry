@@ -296,27 +296,22 @@ function flattenTree(node) {
   return result;
 }
 
-const EXPLORER_PAGES = {
+const EXPLORER_SECTIONS = {
   ROOTS: "roots",
-  NETWORK_VLANS: "network/vlans",
-  NETWORK_VLANS_NEW: "network/vlans/new",
-  NETWORK_WIFI: "network/wifi",
-  NETWORK_WIFI_NEW: "network/wifi/new",
+  NETWORK: "network",
   DEVICES: "devices",
-  DEVICES_NEW: "devices/new",
-  TOPOLOGY: "topology",
   USERS: "users",
-  USERS_NEW: "users/new",
 };
 
-const VALID_EXPLORER_PAGES = new Set(Object.values(EXPLORER_PAGES));
+const VALID_EXPLORER_SECTIONS = new Set(Object.values(EXPLORER_SECTIONS));
 
-function pageFromHash() {
+function sectionFromHash() {
   const raw = (window.location.hash || "").replace(/^#\/?/, "");
-  if (VALID_EXPLORER_PAGES.has(raw)) {
-    return raw;
+  const section = raw.split("/")[0] || "";
+  if (VALID_EXPLORER_SECTIONS.has(section)) {
+    return section;
   }
-  return EXPLORER_PAGES.ROOTS;
+  return EXPLORER_SECTIONS.ROOTS;
 }
 
 function MenuButton({ active, onClick, children }) {
@@ -327,8 +322,19 @@ function MenuButton({ active, onClick, children }) {
   );
 }
 
+function SubnavButton({ active, onClick, children }) {
+  return (
+    <button type="button" className={`subnav-btn ${active ? "active" : ""}`} onClick={onClick}>
+      {children}
+    </button>
+  );
+}
+
 function ExplorerScreen({ me, accessToken, onLogout, notify }) {
-  const [activePage, setActivePage] = useState(pageFromHash);
+  const [activeSection, setActiveSection] = useState(sectionFromHash);
+  const [networkSubPage, setNetworkSubPage] = useState("vlan-list");
+  const [devicesSubPage, setDevicesSubPage] = useState("list");
+  const [usersSubPage, setUsersSubPage] = useState("list");
 
   const [roots, setRoots] = useState([]);
   const [selectedRootId, setSelectedRootId] = useState("");
@@ -346,12 +352,12 @@ function ExplorerScreen({ me, accessToken, onLogout, notify }) {
     [notify],
   );
 
-  const goToPage = useCallback((page) => {
-    if (!VALID_EXPLORER_PAGES.has(page)) {
+  const goToSection = useCallback((section) => {
+    if (!VALID_EXPLORER_SECTIONS.has(section)) {
       return;
     }
-    setActivePage(page);
-    const nextHash = `#/${page}`;
+    setActiveSection(section);
+    const nextHash = `#/${section}`;
     if (window.location.hash !== nextHash) {
       window.location.hash = nextHash;
     }
@@ -653,11 +659,17 @@ function ExplorerScreen({ me, accessToken, onLogout, notify }) {
 
   useEffect(() => {
     const onHashChange = () => {
-      setActivePage(pageFromHash());
+      setActiveSection(sectionFromHash());
     };
     window.addEventListener("hashchange", onHashChange);
     return () => window.removeEventListener("hashchange", onHashChange);
   }, []);
+
+  useEffect(() => {
+    if (!isAdmin && activeSection === EXPLORER_SECTIONS.USERS) {
+      goToSection(EXPLORER_SECTIONS.ROOTS);
+    }
+  }, [activeSection, goToSection, isAdmin]);
 
   useEffect(() => {
     if (!selectedRootId) {
@@ -2718,28 +2730,91 @@ function ExplorerScreen({ me, accessToken, onLogout, notify }) {
     </section>
   );
 
+  const renderNetworkingSection = () => (
+    <section className="subpanel page-panel section-page">
+      <div className="section-header">
+        <h3>Sieć</h3>
+        <p className="muted">VLAN i Wi-Fi dla wybranego roota.</p>
+      </div>
+      <div className="section-tabs">
+        <SubnavButton active={networkSubPage === "vlan-list"} onClick={() => setNetworkSubPage("vlan-list")}>
+          VLAN - przegląd
+        </SubnavButton>
+        <SubnavButton active={networkSubPage === "vlan-add"} onClick={() => setNetworkSubPage("vlan-add")}>
+          VLAN - dodawanie
+        </SubnavButton>
+        <SubnavButton active={networkSubPage === "wifi-list"} onClick={() => setNetworkSubPage("wifi-list")}>
+          Wi-Fi - przegląd
+        </SubnavButton>
+        <SubnavButton active={networkSubPage === "wifi-add"} onClick={() => setNetworkSubPage("wifi-add")}>
+          Wi-Fi - dodawanie
+        </SubnavButton>
+      </div>
+      <div className="section-body">
+        {networkSubPage === "vlan-list" ? renderVlanListPage() : null}
+        {networkSubPage === "vlan-add" ? renderVlanAddPage() : null}
+        {networkSubPage === "wifi-list" ? renderWifiListPage() : null}
+        {networkSubPage === "wifi-add" ? renderWifiAddPage() : null}
+      </div>
+    </section>
+  );
+
+  const renderDevicesSection = () => (
+    <section className="subpanel page-panel section-page">
+      <div className="section-header">
+        <h3>Urządzenia</h3>
+        <p className="muted">Przegląd, dodawanie i topologia PNG.</p>
+      </div>
+      <div className="section-tabs">
+        <SubnavButton active={devicesSubPage === "list"} onClick={() => setDevicesSubPage("list")}>
+          Przegląd
+        </SubnavButton>
+        <SubnavButton active={devicesSubPage === "add"} onClick={() => setDevicesSubPage("add")}>
+          Dodawanie
+        </SubnavButton>
+        <SubnavButton active={devicesSubPage === "topology"} onClick={() => setDevicesSubPage("topology")}>
+          Topologia PNG
+        </SubnavButton>
+      </div>
+      <div className="section-body">
+        {devicesSubPage === "list" ? renderDevicesListPage() : null}
+        {devicesSubPage === "add" ? renderDeviceAddPage() : null}
+        {devicesSubPage === "topology" ? renderTopologyPage() : null}
+      </div>
+    </section>
+  );
+
+  const renderUsersSection = () => (
+    <section className="subpanel page-panel section-page">
+      <div className="section-header">
+        <h3>Użytkownicy</h3>
+        <p className="muted">Zarządzanie kontami i przypisaniami do rootów.</p>
+      </div>
+      <div className="section-tabs">
+        <SubnavButton active={usersSubPage === "list"} onClick={() => setUsersSubPage("list")}>
+          Przegląd
+        </SubnavButton>
+        <SubnavButton active={usersSubPage === "add"} onClick={() => setUsersSubPage("add")}>
+          Dodawanie
+        </SubnavButton>
+      </div>
+      <div className="section-body">
+        {usersSubPage === "list" ? renderUsersListPage() : null}
+        {usersSubPage === "add" ? renderUserAddPage() : null}
+      </div>
+    </section>
+  );
+
   const renderPage = () => {
-    switch (activePage) {
-      case EXPLORER_PAGES.ROOTS:
+    switch (activeSection) {
+      case EXPLORER_SECTIONS.ROOTS:
         return renderRootsPage();
-      case EXPLORER_PAGES.NETWORK_VLANS:
-        return renderVlanListPage();
-      case EXPLORER_PAGES.NETWORK_VLANS_NEW:
-        return renderVlanAddPage();
-      case EXPLORER_PAGES.NETWORK_WIFI:
-        return renderWifiListPage();
-      case EXPLORER_PAGES.NETWORK_WIFI_NEW:
-        return renderWifiAddPage();
-      case EXPLORER_PAGES.DEVICES:
-        return renderDevicesListPage();
-      case EXPLORER_PAGES.DEVICES_NEW:
-        return renderDeviceAddPage();
-      case EXPLORER_PAGES.USERS:
-        return isAdmin ? renderUsersListPage() : renderRootsPage();
-      case EXPLORER_PAGES.USERS_NEW:
-        return isAdmin ? renderUserAddPage() : renderRootsPage();
-      case EXPLORER_PAGES.TOPOLOGY:
-        return renderTopologyPage();
+      case EXPLORER_SECTIONS.NETWORK:
+        return renderNetworkingSection();
+      case EXPLORER_SECTIONS.DEVICES:
+        return renderDevicesSection();
+      case EXPLORER_SECTIONS.USERS:
+        return isAdmin ? renderUsersSection() : renderRootsPage();
       default:
         return renderRootsPage();
     }
@@ -2770,82 +2845,29 @@ function ExplorerScreen({ me, accessToken, onLogout, notify }) {
         </select>
       </div>
 
-      <nav className="top-menu" aria-label="Nawigacja aplikacji">
-        <div className="top-menu-group">
-          <p className="top-menu-title">Rooty</p>
-          <div className="top-menu-buttons">
-            <MenuButton active={activePage === EXPLORER_PAGES.ROOTS} onClick={() => goToPage(EXPLORER_PAGES.ROOTS)}>
-              Rooty i przestrzenie
-            </MenuButton>
-          </div>
-        </div>
-
-        <div className="top-menu-group">
-          <p className="top-menu-title">Sieciowe</p>
-          <div className="top-menu-buttons">
-            <MenuButton
-              active={activePage === EXPLORER_PAGES.NETWORK_VLANS}
-              onClick={() => goToPage(EXPLORER_PAGES.NETWORK_VLANS)}
-            >
-              VLAN - przegląd
-            </MenuButton>
-            <MenuButton
-              active={activePage === EXPLORER_PAGES.NETWORK_VLANS_NEW}
-              onClick={() => goToPage(EXPLORER_PAGES.NETWORK_VLANS_NEW)}
-            >
-              VLAN - dodawanie
-            </MenuButton>
-            <MenuButton
-              active={activePage === EXPLORER_PAGES.NETWORK_WIFI}
-              onClick={() => goToPage(EXPLORER_PAGES.NETWORK_WIFI)}
-            >
-              Wi-Fi - przegląd
-            </MenuButton>
-            <MenuButton
-              active={activePage === EXPLORER_PAGES.NETWORK_WIFI_NEW}
-              onClick={() => goToPage(EXPLORER_PAGES.NETWORK_WIFI_NEW)}
-            >
-              Wi-Fi - dodawanie
-            </MenuButton>
-          </div>
-        </div>
-
-        <div className="top-menu-group">
-          <p className="top-menu-title">Urządzenia</p>
-          <div className="top-menu-buttons">
-            <MenuButton active={activePage === EXPLORER_PAGES.DEVICES} onClick={() => goToPage(EXPLORER_PAGES.DEVICES)}>
-              Urządzenia - przegląd
-            </MenuButton>
-            <MenuButton
-              active={activePage === EXPLORER_PAGES.DEVICES_NEW}
-              onClick={() => goToPage(EXPLORER_PAGES.DEVICES_NEW)}
-            >
-              Urządzenia - dodawanie
-            </MenuButton>
-            <MenuButton
-              active={activePage === EXPLORER_PAGES.TOPOLOGY}
-              onClick={() => goToPage(EXPLORER_PAGES.TOPOLOGY)}
-            >
-              Topologia PNG
-            </MenuButton>
-          </div>
-        </div>
-
+      <nav className="top-menu-main" aria-label="Główne menu aplikacji">
+        <MenuButton active={activeSection === EXPLORER_SECTIONS.ROOTS} onClick={() => goToSection(EXPLORER_SECTIONS.ROOTS)}>
+          Root
+        </MenuButton>
+        <MenuButton
+          active={activeSection === EXPLORER_SECTIONS.NETWORK}
+          onClick={() => goToSection(EXPLORER_SECTIONS.NETWORK)}
+        >
+          Sieć
+        </MenuButton>
+        <MenuButton
+          active={activeSection === EXPLORER_SECTIONS.DEVICES}
+          onClick={() => goToSection(EXPLORER_SECTIONS.DEVICES)}
+        >
+          Urządzenia
+        </MenuButton>
         {isAdmin ? (
-          <div className="top-menu-group">
-            <p className="top-menu-title">Użytkownicy</p>
-            <div className="top-menu-buttons">
-              <MenuButton active={activePage === EXPLORER_PAGES.USERS} onClick={() => goToPage(EXPLORER_PAGES.USERS)}>
-                Użytkownicy - przegląd
-              </MenuButton>
-              <MenuButton
-                active={activePage === EXPLORER_PAGES.USERS_NEW}
-                onClick={() => goToPage(EXPLORER_PAGES.USERS_NEW)}
-              >
-                Użytkownicy - dodawanie
-              </MenuButton>
-            </div>
-          </div>
+          <MenuButton
+            active={activeSection === EXPLORER_SECTIONS.USERS}
+            onClick={() => goToSection(EXPLORER_SECTIONS.USERS)}
+          >
+            Użytkownicy
+          </MenuButton>
         ) : null}
       </nav>
 
