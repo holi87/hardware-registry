@@ -10,6 +10,7 @@ from app.api import devices as devices_module
 from app.api import locations as locations_module
 from app.api import root_access as root_access_module
 from app.api import setup as setup_api
+from app.api import vlans as vlans_module
 from app.api import wifi as wifi_module
 from app.core.crypto import encrypt_secret
 from app.models.connection import ConnectionTechnology
@@ -122,6 +123,18 @@ def test_wifi_create_request_requires_vlan():
             password="Secret!12345",
             security="WPA2",
         )
+
+
+def test_vlan_cidr_validation_rejects_invalid_value():
+    with pytest.raises(HTTPException) as exc:
+        vlans_module._normalize_cidr("10.10.10.1/24")
+
+    assert exc.value.status_code == 422
+    assert "Invalid CIDR format" in str(exc.value.detail)
+
+
+def test_vlan_cidr_validation_normalizes_value():
+    assert vlans_module._normalize_cidr("10.10.10.0/24") == "10.10.10.0/24"
 
 
 class FakeDeviceDb:

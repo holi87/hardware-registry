@@ -296,6 +296,29 @@ function flattenTree(node) {
   return result;
 }
 
+const EXPLORER_PAGES = {
+  ROOTS: "roots",
+  NETWORK_VLANS: "network/vlans",
+  NETWORK_VLANS_NEW: "network/vlans/new",
+  NETWORK_WIFI: "network/wifi",
+  NETWORK_WIFI_NEW: "network/wifi/new",
+  DEVICES: "devices",
+  DEVICES_NEW: "devices/new",
+  TOPOLOGY: "topology",
+  USERS: "users",
+  USERS_NEW: "users/new",
+};
+
+const VALID_EXPLORER_PAGES = new Set(Object.values(EXPLORER_PAGES));
+
+function pageFromHash() {
+  const raw = (window.location.hash || "").replace(/^#\/?/, "");
+  if (VALID_EXPLORER_PAGES.has(raw)) {
+    return raw;
+  }
+  return EXPLORER_PAGES.ROOTS;
+}
+
 function MenuButton({ active, onClick, children }) {
   return (
     <button type="button" className={`menu-btn ${active ? "active" : ""}`} onClick={onClick}>
@@ -304,19 +327,8 @@ function MenuButton({ active, onClick, children }) {
   );
 }
 
-function SubnavButton({ active, onClick, children }) {
-  return (
-    <button type="button" className={`subnav-btn ${active ? "active" : ""}`} onClick={onClick}>
-      {children}
-    </button>
-  );
-}
-
 function ExplorerScreen({ me, accessToken, onLogout, notify }) {
-  const [activeSection, setActiveSection] = useState("roots");
-  const [networkSubPage, setNetworkSubPage] = useState("vlan-list");
-  const [devicesSubPage, setDevicesSubPage] = useState("list");
-  const [usersSubPage, setUsersSubPage] = useState("list");
+  const [activePage, setActivePage] = useState(pageFromHash);
 
   const [roots, setRoots] = useState([]);
   const [selectedRootId, setSelectedRootId] = useState("");
@@ -334,6 +346,17 @@ function ExplorerScreen({ me, accessToken, onLogout, notify }) {
     [notify],
   );
 
+  const goToPage = useCallback((page) => {
+    if (!VALID_EXPLORER_PAGES.has(page)) {
+      return;
+    }
+    setActivePage(page);
+    const nextHash = `#/${page}`;
+    if (window.location.hash !== nextHash) {
+      window.location.hash = nextHash;
+    }
+  }, []);
+
   const [rootForm, setRootForm] = useState({ name: "", notes: "" });
   const [editingRootId, setEditingRootId] = useState("");
   const [rootEditForm, setRootEditForm] = useState({ name: "", notes: "" });
@@ -345,18 +368,14 @@ function ExplorerScreen({ me, accessToken, onLogout, notify }) {
   const [vlanForm, setVlanForm] = useState({
     vlanId: "",
     name: "",
-    subnetMask: "255.255.255.0",
-    ipRangeStart: "",
-    ipRangeEnd: "",
+    cidr: "",
     notes: "",
   });
   const [editingVlanId, setEditingVlanId] = useState("");
   const [vlanEditForm, setVlanEditForm] = useState({
     vlanId: "",
     name: "",
-    subnetMask: "",
-    ipRangeStart: "",
-    ipRangeEnd: "",
+    cidr: "",
     notes: "",
   });
 
@@ -633,6 +652,14 @@ function ExplorerScreen({ me, accessToken, onLogout, notify }) {
   }, [accessToken]);
 
   useEffect(() => {
+    const onHashChange = () => {
+      setActivePage(pageFromHash());
+    };
+    window.addEventListener("hashchange", onHashChange);
+    return () => window.removeEventListener("hashchange", onHashChange);
+  }, []);
+
+  useEffect(() => {
     if (!selectedRootId) {
       return;
     }
@@ -836,6 +863,10 @@ function ExplorerScreen({ me, accessToken, onLogout, notify }) {
       setError("VLAN ID musi być liczbą 1-4094");
       return;
     }
+    if (!vlanForm.cidr.trim()) {
+      setError("Podaj adresację VLAN w formacie CIDR (np. 10.10.10.0/24)");
+      return;
+    }
 
     setError("");
     try {
@@ -846,9 +877,7 @@ function ExplorerScreen({ me, accessToken, onLogout, notify }) {
           root_id: selectedRootId,
           vlan_id: vlanId,
           name: vlanForm.name,
-          subnet_mask: vlanForm.subnetMask,
-          ip_range_start: vlanForm.ipRangeStart,
-          ip_range_end: vlanForm.ipRangeEnd,
+          cidr: vlanForm.cidr,
           notes: vlanForm.notes || null,
         }),
       });
@@ -859,9 +888,7 @@ function ExplorerScreen({ me, accessToken, onLogout, notify }) {
       setVlanForm({
         vlanId: "",
         name: "",
-        subnetMask: "255.255.255.0",
-        ipRangeStart: "",
-        ipRangeEnd: "",
+        cidr: "",
         notes: "",
       });
       await loadVlans(selectedRootId);
@@ -997,9 +1024,7 @@ function ExplorerScreen({ me, accessToken, onLogout, notify }) {
     setVlanEditForm({
       vlanId: String(vlan.vlan_id),
       name: vlan.name || "",
-      subnetMask: vlan.subnet_mask || "",
-      ipRangeStart: vlan.ip_range_start || "",
-      ipRangeEnd: vlan.ip_range_end || "",
+      cidr: vlan.cidr || "",
       notes: vlan.notes || "",
     });
   };
@@ -1013,6 +1038,10 @@ function ExplorerScreen({ me, accessToken, onLogout, notify }) {
       setError("VLAN ID musi być liczbą 1-4094");
       return;
     }
+    if (!vlanEditForm.cidr.trim()) {
+      setError("Podaj adresację VLAN w formacie CIDR");
+      return;
+    }
 
     setError("");
     try {
@@ -1022,9 +1051,7 @@ function ExplorerScreen({ me, accessToken, onLogout, notify }) {
         body: JSON.stringify({
           vlan_id: parsedVlanId,
           name: vlanEditForm.name,
-          subnet_mask: vlanEditForm.subnetMask,
-          ip_range_start: vlanEditForm.ipRangeStart,
-          ip_range_end: vlanEditForm.ipRangeEnd,
+          cidr: vlanEditForm.cidr,
           notes: vlanEditForm.notes || null,
         }),
       });
@@ -1629,9 +1656,7 @@ function ExplorerScreen({ me, accessToken, onLogout, notify }) {
             <tr>
               <th>ID</th>
               <th>Nazwa</th>
-              <th>Maska</th>
-              <th>Range start</th>
-              <th>Range end</th>
+              <th>CIDR</th>
               <th>Notatki</th>
               <th>Akcje</th>
             </tr>
@@ -1639,7 +1664,7 @@ function ExplorerScreen({ me, accessToken, onLogout, notify }) {
           <tbody>
             {vlanList.length === 0 ? (
               <tr>
-                <td colSpan={7}>Brak VLAN</td>
+                <td colSpan={5}>Brak VLAN</td>
               </tr>
             ) : (
               vlanList.map((vlan) => {
@@ -1649,9 +1674,7 @@ function ExplorerScreen({ me, accessToken, onLogout, notify }) {
                     <tr>
                       <td>{vlan.vlan_id}</td>
                       <td>{vlan.name}</td>
-                      <td>{vlan.subnet_mask}</td>
-                      <td>{vlan.ip_range_start}</td>
-                      <td>{vlan.ip_range_end}</td>
+                      <td>{vlan.cidr}</td>
                       <td>{vlan.notes || "-"}</td>
                       <td>
                         {isAdmin ? (
@@ -1670,7 +1693,7 @@ function ExplorerScreen({ me, accessToken, onLogout, notify }) {
                     </tr>
                     {isEditing ? (
                       <tr className="edit-row">
-                        <td colSpan={7}>
+                        <td colSpan={5}>
                           <form
                             className="inline-form compact-form"
                             onSubmit={(event) => {
@@ -1702,35 +1725,14 @@ function ExplorerScreen({ me, accessToken, onLogout, notify }) {
                                 />
                               </div>
                               <div>
-                                <label htmlFor={`vlan-edit-mask-${vlan.id}`}>Maska</label>
+                                <label htmlFor={`vlan-edit-cidr-${vlan.id}`}>CIDR</label>
                                 <input
-                                  id={`vlan-edit-mask-${vlan.id}`}
-                                  value={vlanEditForm.subnetMask}
+                                  id={`vlan-edit-cidr-${vlan.id}`}
+                                  value={vlanEditForm.cidr}
                                   onChange={(event) =>
-                                    setVlanEditForm((prev) => ({ ...prev, subnetMask: event.target.value }))
+                                    setVlanEditForm((prev) => ({ ...prev, cidr: event.target.value }))
                                   }
-                                  required
-                                />
-                              </div>
-                              <div>
-                                <label htmlFor={`vlan-edit-range-start-${vlan.id}`}>Zakres IP start</label>
-                                <input
-                                  id={`vlan-edit-range-start-${vlan.id}`}
-                                  value={vlanEditForm.ipRangeStart}
-                                  onChange={(event) =>
-                                    setVlanEditForm((prev) => ({ ...prev, ipRangeStart: event.target.value }))
-                                  }
-                                  required
-                                />
-                              </div>
-                              <div>
-                                <label htmlFor={`vlan-edit-range-end-${vlan.id}`}>Zakres IP end</label>
-                                <input
-                                  id={`vlan-edit-range-end-${vlan.id}`}
-                                  value={vlanEditForm.ipRangeEnd}
-                                  onChange={(event) =>
-                                    setVlanEditForm((prev) => ({ ...prev, ipRangeEnd: event.target.value }))
-                                  }
+                                  placeholder="10.10.10.0/24"
                                   required
                                 />
                               </div>
@@ -1788,27 +1790,12 @@ function ExplorerScreen({ me, accessToken, onLogout, notify }) {
             required
           />
 
-          <label htmlFor="vlan-mask">Maska</label>
+          <label htmlFor="vlan-cidr">CIDR</label>
           <input
-            id="vlan-mask"
-            value={vlanForm.subnetMask}
-            onChange={(event) => setVlanForm((prev) => ({ ...prev, subnetMask: event.target.value }))}
-            required
-          />
-
-          <label htmlFor="vlan-range-start">Zakres IP start</label>
-          <input
-            id="vlan-range-start"
-            value={vlanForm.ipRangeStart}
-            onChange={(event) => setVlanForm((prev) => ({ ...prev, ipRangeStart: event.target.value }))}
-            required
-          />
-
-          <label htmlFor="vlan-range-end">Zakres IP end</label>
-          <input
-            id="vlan-range-end"
-            value={vlanForm.ipRangeEnd}
-            onChange={(event) => setVlanForm((prev) => ({ ...prev, ipRangeEnd: event.target.value }))}
+            id="vlan-cidr"
+            value={vlanForm.cidr}
+            onChange={(event) => setVlanForm((prev) => ({ ...prev, cidr: event.target.value }))}
+            placeholder="10.10.10.0/24"
             required
           />
 
@@ -2731,88 +2718,27 @@ function ExplorerScreen({ me, accessToken, onLogout, notify }) {
     </section>
   );
 
-  const renderNetworkingSection = () => (
-    <section className="subpanel page-panel section-page">
-      <div className="section-header">
-        <h3>Sieciowe</h3>
-        <p className="muted">Zarządzanie VLAN i sieciami Wi-Fi dla wybranego roota.</p>
-      </div>
-      <div className="section-tabs">
-        <SubnavButton active={networkSubPage === "vlan-list"} onClick={() => setNetworkSubPage("vlan-list")}>
-          VLAN - przegląd
-        </SubnavButton>
-        <SubnavButton active={networkSubPage === "vlan-add"} onClick={() => setNetworkSubPage("vlan-add")}>
-          VLAN - dodawanie
-        </SubnavButton>
-        <SubnavButton active={networkSubPage === "wifi-list"} onClick={() => setNetworkSubPage("wifi-list")}>
-          Wi-Fi - przegląd
-        </SubnavButton>
-        <SubnavButton active={networkSubPage === "wifi-add"} onClick={() => setNetworkSubPage("wifi-add")}>
-          Wi-Fi - dodawanie
-        </SubnavButton>
-      </div>
-      <div className="section-body">
-        {networkSubPage === "vlan-list" ? renderVlanListPage() : null}
-        {networkSubPage === "vlan-add" ? renderVlanAddPage() : null}
-        {networkSubPage === "wifi-list" ? renderWifiListPage() : null}
-        {networkSubPage === "wifi-add" ? renderWifiAddPage() : null}
-      </div>
-    </section>
-  );
-
-  const renderDevicesSection = () => (
-    <section className="subpanel page-panel section-page">
-      <div className="section-header">
-        <h3>Urządzenia</h3>
-        <p className="muted">Przegląd i konfiguracja urządzeń wraz z możliwością dodawania nowych rekordów.</p>
-      </div>
-      <div className="section-tabs">
-        <SubnavButton active={devicesSubPage === "list"} onClick={() => setDevicesSubPage("list")}>
-          Przegląd
-        </SubnavButton>
-        <SubnavButton active={devicesSubPage === "add"} onClick={() => setDevicesSubPage("add")}>
-          Dodawanie
-        </SubnavButton>
-      </div>
-      <div className="section-body">
-        {devicesSubPage === "list" ? renderDevicesListPage() : null}
-        {devicesSubPage === "add" ? renderDeviceAddPage() : null}
-      </div>
-    </section>
-  );
-
-  const renderUsersSection = () => (
-    <section className="subpanel page-panel section-page">
-      <div className="section-header">
-        <h3>Użytkownicy</h3>
-        <p className="muted">Zarządzanie kontami, rolami, przypisaniami rootów oraz resetami haseł.</p>
-      </div>
-      <div className="section-tabs">
-        <SubnavButton active={usersSubPage === "list"} onClick={() => setUsersSubPage("list")}>
-          Przegląd
-        </SubnavButton>
-        <SubnavButton active={usersSubPage === "add"} onClick={() => setUsersSubPage("add")}>
-          Dodawanie
-        </SubnavButton>
-      </div>
-      <div className="section-body">
-        {usersSubPage === "list" ? renderUsersListPage() : null}
-        {usersSubPage === "add" ? renderUserAddPage() : null}
-      </div>
-    </section>
-  );
-
   const renderPage = () => {
-    switch (activeSection) {
-      case "roots":
+    switch (activePage) {
+      case EXPLORER_PAGES.ROOTS:
         return renderRootsPage();
-      case "network":
-        return renderNetworkingSection();
-      case "devices":
-        return renderDevicesSection();
-      case "users":
-        return renderUsersSection();
-      case "topology":
+      case EXPLORER_PAGES.NETWORK_VLANS:
+        return renderVlanListPage();
+      case EXPLORER_PAGES.NETWORK_VLANS_NEW:
+        return renderVlanAddPage();
+      case EXPLORER_PAGES.NETWORK_WIFI:
+        return renderWifiListPage();
+      case EXPLORER_PAGES.NETWORK_WIFI_NEW:
+        return renderWifiAddPage();
+      case EXPLORER_PAGES.DEVICES:
+        return renderDevicesListPage();
+      case EXPLORER_PAGES.DEVICES_NEW:
+        return renderDeviceAddPage();
+      case EXPLORER_PAGES.USERS:
+        return isAdmin ? renderUsersListPage() : renderRootsPage();
+      case EXPLORER_PAGES.USERS_NEW:
+        return isAdmin ? renderUserAddPage() : renderRootsPage();
+      case EXPLORER_PAGES.TOPOLOGY:
         return renderTopologyPage();
       default:
         return renderRootsPage();
@@ -2848,25 +2774,65 @@ function ExplorerScreen({ me, accessToken, onLogout, notify }) {
           <aside className="menu-panel">
             <h3>Menu</h3>
 
-            <p className="menu-group-title">Obszary</p>
-            <MenuButton active={activeSection === "roots"} onClick={() => setActiveSection("roots")}>
+            <p className="menu-group-title">Rooty</p>
+            <MenuButton active={activePage === EXPLORER_PAGES.ROOTS} onClick={() => goToPage(EXPLORER_PAGES.ROOTS)}>
               Rooty i przestrzenie
             </MenuButton>
-            <MenuButton active={activeSection === "network"} onClick={() => setActiveSection("network")}>
-              Sieciowe
+
+            <p className="menu-group-title">Sieciowe</p>
+            <MenuButton
+              active={activePage === EXPLORER_PAGES.NETWORK_VLANS}
+              onClick={() => goToPage(EXPLORER_PAGES.NETWORK_VLANS)}
+            >
+              VLAN - przegląd
             </MenuButton>
-            <MenuButton active={activeSection === "devices"} onClick={() => setActiveSection("devices")}>
-              Urządzenia
+            <MenuButton
+              active={activePage === EXPLORER_PAGES.NETWORK_VLANS_NEW}
+              onClick={() => goToPage(EXPLORER_PAGES.NETWORK_VLANS_NEW)}
+            >
+              VLAN - dodawanie
             </MenuButton>
-            <MenuButton active={activeSection === "topology"} onClick={() => setActiveSection("topology")}>
+            <MenuButton
+              active={activePage === EXPLORER_PAGES.NETWORK_WIFI}
+              onClick={() => goToPage(EXPLORER_PAGES.NETWORK_WIFI)}
+            >
+              Wi-Fi - przegląd
+            </MenuButton>
+            <MenuButton
+              active={activePage === EXPLORER_PAGES.NETWORK_WIFI_NEW}
+              onClick={() => goToPage(EXPLORER_PAGES.NETWORK_WIFI_NEW)}
+            >
+              Wi-Fi - dodawanie
+            </MenuButton>
+
+            <p className="menu-group-title">Urządzenia</p>
+            <MenuButton active={activePage === EXPLORER_PAGES.DEVICES} onClick={() => goToPage(EXPLORER_PAGES.DEVICES)}>
+              Urządzenia - przegląd
+            </MenuButton>
+            <MenuButton
+              active={activePage === EXPLORER_PAGES.DEVICES_NEW}
+              onClick={() => goToPage(EXPLORER_PAGES.DEVICES_NEW)}
+            >
+              Urządzenia - dodawanie
+            </MenuButton>
+            <MenuButton
+              active={activePage === EXPLORER_PAGES.TOPOLOGY}
+              onClick={() => goToPage(EXPLORER_PAGES.TOPOLOGY)}
+            >
               Topologia PNG
             </MenuButton>
 
             {isAdmin ? (
               <>
                 <p className="menu-group-title">Użytkownicy</p>
-                <MenuButton active={activeSection === "users"} onClick={() => setActiveSection("users")}>
-                  Użytkownicy
+                <MenuButton active={activePage === EXPLORER_PAGES.USERS} onClick={() => goToPage(EXPLORER_PAGES.USERS)}>
+                  Użytkownicy - przegląd
+                </MenuButton>
+                <MenuButton
+                  active={activePage === EXPLORER_PAGES.USERS_NEW}
+                  onClick={() => goToPage(EXPLORER_PAGES.USERS_NEW)}
+                >
+                  Użytkownicy - dodawanie
                 </MenuButton>
               </>
             ) : null}

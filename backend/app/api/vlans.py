@@ -24,9 +24,7 @@ class VlanResponse(BaseModel):
     root_id: UUID
     vlan_id: int
     name: str
-    subnet_mask: str
-    ip_range_start: str
-    ip_range_end: str
+    cidr: str
     notes: str | None
     created_at: datetime
 
@@ -37,9 +35,7 @@ class CreateVlanRequest(BaseModel):
     root_id: UUID
     vlan_id: int = Field(ge=1, le=4094)
     name: str = Field(min_length=1, max_length=255)
-    subnet_mask: str = Field(min_length=1, max_length=64)
-    ip_range_start: str = Field(min_length=1, max_length=64)
-    ip_range_end: str = Field(min_length=1, max_length=64)
+    cidr: str = Field(min_length=1, max_length=64)
     notes: str | None = None
 
 
@@ -48,34 +44,16 @@ class UpdateVlanRequest(BaseModel):
 
     vlan_id: int | None = Field(default=None, ge=1, le=4094)
     name: str | None = Field(default=None, min_length=1, max_length=255)
-    subnet_mask: str | None = Field(default=None, min_length=1, max_length=64)
-    ip_range_start: str | None = Field(default=None, min_length=1, max_length=64)
-    ip_range_end: str | None = Field(default=None, min_length=1, max_length=64)
+    cidr: str | None = Field(default=None, min_length=1, max_length=64)
     notes: str | None = None
 
 
-def _validate_ip_fields(subnet_mask: str, range_start: str, range_end: str) -> None:
+def _normalize_cidr(cidr: str) -> str:
     try:
-        ipaddress.IPv4Address(subnet_mask)
+        network = ipaddress.ip_network(cidr, strict=True)
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid subnet mask format") from exc
-
-    try:
-        start_ip = ipaddress.ip_address(range_start)
-        end_ip = ipaddress.ip_address(range_end)
-    except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid IP range format") from exc
-
-    if start_ip.version != end_ip.version:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="IP range start and end must use the same IP version",
-        )
-    if int(start_ip) > int(end_ip):
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="IP range start must be less than or equal to range end",
-        )
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid CIDR format") from exc
+    return str(network)
 
 
 @router.get("", response_model=list[VlanResponse])
@@ -94,9 +72,7 @@ def list_vlans(
             root_id=vlan.root_id,
             vlan_id=vlan.vlan_id,
             name=vlan.name,
-            subnet_mask=vlan.subnet_mask,
-            ip_range_start=vlan.ip_range_start,
-            ip_range_end=vlan.ip_range_end,
+            cidr=vlan.cidr,
             notes=vlan.notes,
             created_at=vlan.created_at,
         )
@@ -111,15 +87,13 @@ def create_vlan(
     db: Session = Depends(get_db),
 ) -> VlanResponse:
     ensure_root_exists(db, payload.root_id)
-    _validate_ip_fields(payload.subnet_mask, payload.ip_range_start, payload.ip_range_end)
+    normalized_cidr = _normalize_cidr(payload.cidr)
 
     vlan = Vlan(
         root_id=payload.root_id,
         vlan_id=payload.vlan_id,
         name=payload.name,
-        subnet_mask=payload.subnet_mask,
-        ip_range_start=payload.ip_range_start,
-        ip_range_end=payload.ip_range_end,
+        cidr=normalized_cidr,
         notes=payload.notes,
     )
     db.add(vlan)
@@ -135,9 +109,7 @@ def create_vlan(
         root_id=vlan.root_id,
         vlan_id=vlan.vlan_id,
         name=vlan.name,
-        subnet_mask=vlan.subnet_mask,
-        ip_range_start=vlan.ip_range_start,
-        ip_range_end=vlan.ip_range_end,
+        cidr=vlan.cidr,
         notes=vlan.notes,
         created_at=vlan.created_at,
     )
@@ -158,16 +130,12 @@ def update_vlan(
         vlan.name = payload.name
     if payload.vlan_id is not None:
         vlan.vlan_id = payload.vlan_id
-    if payload.subnet_mask is not None:
-        vlan.subnet_mask = payload.subnet_mask
-    if payload.ip_range_start is not None:
-        vlan.ip_range_start = payload.ip_range_start
-    if payload.ip_range_end is not None:
-        vlan.ip_range_end = payload.ip_range_end
+    if payload.cidr is not None:
+        vlan.cidr = payload.cidr
     if "notes" in payload.model_fields_set:
         vlan.notes = payload.notes
 
-    _validate_ip_fields(vlan.subnet_mask, vlan.ip_range_start, vlan.ip_range_end)
+    vlan.cidr = _normalize_cidr(vlan.cidr)
 
     db.add(vlan)
     try:
@@ -182,9 +150,7 @@ def update_vlan(
         root_id=vlan.root_id,
         vlan_id=vlan.vlan_id,
         name=vlan.name,
-        subnet_mask=vlan.subnet_mask,
-        ip_range_start=vlan.ip_range_start,
-        ip_range_end=vlan.ip_range_end,
+        cidr=vlan.cidr,
         notes=vlan.notes,
         created_at=vlan.created_at,
     )
