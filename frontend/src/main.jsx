@@ -2821,59 +2821,68 @@ function ExplorerScreen({ me, accessToken, onLogout, notify }) {
   };
 
   return (
-    <section className="panel">
-      <div className="panel-header">
-        <div>
-          <h2>Hardware Registry</h2>
-          <p className="muted">
-            {me.email} ({me.role})
-          </p>
-        </div>
-        <button type="button" className="button-secondary" onClick={onLogout}>
-          Wyloguj
-        </button>
-      </div>
-
-      <div className="field">
-        <label htmlFor="root-selector">Aktywny root</label>
-        <select id="root-selector" value={selectedRootId} onChange={onRootChange}>
-          {roots.map((root) => (
-            <option key={root.id} value={root.id}>
-              {root.name}
-            </option>
-          ))}
-        </select>
-      </div>
-
-      <nav className="top-menu-main" aria-label="Główne menu aplikacji">
-        <MenuButton active={activeSection === EXPLORER_SECTIONS.ROOTS} onClick={() => goToSection(EXPLORER_SECTIONS.ROOTS)}>
-          Root
-        </MenuButton>
-        <MenuButton
-          active={activeSection === EXPLORER_SECTIONS.NETWORK}
-          onClick={() => goToSection(EXPLORER_SECTIONS.NETWORK)}
-        >
-          Sieć
-        </MenuButton>
-        <MenuButton
-          active={activeSection === EXPLORER_SECTIONS.DEVICES}
-          onClick={() => goToSection(EXPLORER_SECTIONS.DEVICES)}
-        >
-          Urządzenia
-        </MenuButton>
-        {isAdmin ? (
+    <section className="explorer-shell">
+      <div className="workspace-topbar">
+        <nav className="top-menu-main" aria-label="Główne menu aplikacji">
           <MenuButton
-            active={activeSection === EXPLORER_SECTIONS.USERS}
-            onClick={() => goToSection(EXPLORER_SECTIONS.USERS)}
+            active={activeSection === EXPLORER_SECTIONS.ROOTS}
+            onClick={() => goToSection(EXPLORER_SECTIONS.ROOTS)}
           >
-            Użytkownicy
+            Root
           </MenuButton>
-        ) : null}
-      </nav>
+          <MenuButton
+            active={activeSection === EXPLORER_SECTIONS.NETWORK}
+            onClick={() => goToSection(EXPLORER_SECTIONS.NETWORK)}
+          >
+            Sieć
+          </MenuButton>
+          <MenuButton
+            active={activeSection === EXPLORER_SECTIONS.DEVICES}
+            onClick={() => goToSection(EXPLORER_SECTIONS.DEVICES)}
+          >
+            Urządzenia
+          </MenuButton>
+          {isAdmin ? (
+            <MenuButton
+              active={activeSection === EXPLORER_SECTIONS.USERS}
+              onClick={() => goToSection(EXPLORER_SECTIONS.USERS)}
+            >
+              Użytkownicy
+            </MenuButton>
+          ) : null}
+        </nav>
 
-      <div className="content-panel">{renderPage()}</div>
+        <div className="workspace-controls">
+          <label className="root-inline" htmlFor="root-selector-top">
+            <span>Root</span>
+            <select id="root-selector-top" value={selectedRootId} onChange={onRootChange}>
+              {roots.map((root) => (
+                <option key={root.id} value={root.id}>
+                  {root.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button type="button" className="button-secondary" onClick={onLogout}>
+            Wyloguj
+          </button>
+        </div>
+      </div>
 
-      {loading ? <p>Ładowanie danych...</p> : null}
+      <section className="panel">
+        <div className="panel-header">
+          <div>
+            <h2>Hardware Registry</h2>
+            <p className="muted">
+              {me.email} ({me.role})
+            </p>
+          </div>
+        </div>
+
+        <div className="content-panel">{renderPage()}</div>
+
+        {loading ? <p>Ładowanie danych...</p> : null}
+      </section>
     </section>
   );
 }

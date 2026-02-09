@@ -207,14 +207,55 @@ button:disabled {
   margin: 0;
 }
 
+.explorer-shell {
+  display: grid;
+  gap: 0.8rem;
+}
+
+.workspace-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.8rem;
+}
+
 .top-menu-main {
   display: flex;
   flex-wrap: wrap;
   gap: 0.5rem;
-  padding: 0.45rem;
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  background: var(--surface-soft);
+  padding: 0;
+}
+
+.workspace-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.root-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-weight: 600;
+}
+
+.root-inline span {
+  color: var(--muted);
+  font-size: 0.83rem;
+  white-space: nowrap;
+}
+
+.root-inline select {
+  width: auto;
+  min-width: 180px;
+  max-width: 230px;
+  padding: 0.5rem 0.65rem;
+  border-radius: 9px;
+}
+
+.workspace-controls .button-secondary {
+  min-height: 36px;
+  padding: 0.5rem 0.78rem;
 }
 
 .menu-btn {
@@ -228,7 +269,7 @@ button:disabled {
   min-height: 40px;
   width: auto;
   white-space: nowrap;
-  padding: 0.55rem 1.05rem;
+  padding: 0.5rem 0.9rem;
 }
 
 .menu-btn.active {
@@ -647,6 +688,25 @@ button:disabled {
 @media (max-width: 1200px) {
   .app {
     padding: 1rem;
+  }
+
+  .workspace-topbar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .workspace-controls {
+    justify-content: space-between;
+  }
+
+  .root-inline {
+    flex: 1;
+  }
+
+  .root-inline select {
+    width: 100%;
+    min-width: 0;
+    max-width: none;
   }
 
   .toast-stack {
