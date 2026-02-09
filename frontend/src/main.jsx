@@ -304,16 +304,35 @@ function MenuButton({ active, onClick, children }) {
   );
 }
 
+function SubnavButton({ active, onClick, children }) {
+  return (
+    <button type="button" className={`subnav-btn ${active ? "active" : ""}`} onClick={onClick}>
+      {children}
+    </button>
+  );
+}
+
 function ExplorerScreen({ me, accessToken, onLogout, notify }) {
-  const [activePage, setActivePage] = useState("roots");
+  const [activeSection, setActiveSection] = useState("roots");
+  const [networkSubPage, setNetworkSubPage] = useState("vlan-list");
+  const [devicesSubPage, setDevicesSubPage] = useState("list");
+  const [usersSubPage, setUsersSubPage] = useState("list");
 
   const [roots, setRoots] = useState([]);
   const [selectedRootId, setSelectedRootId] = useState("");
   const [spaces, setSpaces] = useState([]);
 
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
-  const lastErrorToastRef = useRef("");
+  const [error, setRawError] = useState("");
+  const setError = useCallback(
+    (message) => {
+      setRawError(message);
+      if (message) {
+        notify(message, "error");
+      }
+    },
+    [notify],
+  );
 
   const [rootForm, setRootForm] = useState({ name: "", notes: "" });
   const [editingRootId, setEditingRootId] = useState("");
@@ -575,19 +594,6 @@ function ExplorerScreen({ me, accessToken, onLogout, notify }) {
     }
     await Promise.all([loadSpaces(rootId), loadVlans(rootId), loadWifi(rootId), loadDevices(rootId)]);
   };
-
-  useEffect(() => {
-    if (!error) {
-      lastErrorToastRef.current = "";
-      return;
-    }
-    if (lastErrorToastRef.current === error) {
-      return;
-    }
-    lastErrorToastRef.current = error;
-    notify(error, "error");
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [error, notify]);
 
   useEffect(() => {
     let mounted = true;
@@ -2509,7 +2515,7 @@ function ExplorerScreen({ me, accessToken, onLogout, notify }) {
       {!isAdmin ? <p>Brak uprawnień (ADMIN)</p> : null}
       {isAdmin ? (
         <div className="table-wrap">
-          <table className="data-table">
+          <table className="data-table users-table">
             <thead>
               <tr>
                 <th>Email</th>
@@ -2725,26 +2731,87 @@ function ExplorerScreen({ me, accessToken, onLogout, notify }) {
     </section>
   );
 
+  const renderNetworkingSection = () => (
+    <section className="subpanel page-panel section-page">
+      <div className="section-header">
+        <h3>Sieciowe</h3>
+        <p className="muted">Zarządzanie VLAN i sieciami Wi-Fi dla wybranego roota.</p>
+      </div>
+      <div className="section-tabs">
+        <SubnavButton active={networkSubPage === "vlan-list"} onClick={() => setNetworkSubPage("vlan-list")}>
+          VLAN - przegląd
+        </SubnavButton>
+        <SubnavButton active={networkSubPage === "vlan-add"} onClick={() => setNetworkSubPage("vlan-add")}>
+          VLAN - dodawanie
+        </SubnavButton>
+        <SubnavButton active={networkSubPage === "wifi-list"} onClick={() => setNetworkSubPage("wifi-list")}>
+          Wi-Fi - przegląd
+        </SubnavButton>
+        <SubnavButton active={networkSubPage === "wifi-add"} onClick={() => setNetworkSubPage("wifi-add")}>
+          Wi-Fi - dodawanie
+        </SubnavButton>
+      </div>
+      <div className="section-body">
+        {networkSubPage === "vlan-list" ? renderVlanListPage() : null}
+        {networkSubPage === "vlan-add" ? renderVlanAddPage() : null}
+        {networkSubPage === "wifi-list" ? renderWifiListPage() : null}
+        {networkSubPage === "wifi-add" ? renderWifiAddPage() : null}
+      </div>
+    </section>
+  );
+
+  const renderDevicesSection = () => (
+    <section className="subpanel page-panel section-page">
+      <div className="section-header">
+        <h3>Urządzenia</h3>
+        <p className="muted">Przegląd i konfiguracja urządzeń wraz z możliwością dodawania nowych rekordów.</p>
+      </div>
+      <div className="section-tabs">
+        <SubnavButton active={devicesSubPage === "list"} onClick={() => setDevicesSubPage("list")}>
+          Przegląd
+        </SubnavButton>
+        <SubnavButton active={devicesSubPage === "add"} onClick={() => setDevicesSubPage("add")}>
+          Dodawanie
+        </SubnavButton>
+      </div>
+      <div className="section-body">
+        {devicesSubPage === "list" ? renderDevicesListPage() : null}
+        {devicesSubPage === "add" ? renderDeviceAddPage() : null}
+      </div>
+    </section>
+  );
+
+  const renderUsersSection = () => (
+    <section className="subpanel page-panel section-page">
+      <div className="section-header">
+        <h3>Użytkownicy</h3>
+        <p className="muted">Zarządzanie kontami, rolami, przypisaniami rootów oraz resetami haseł.</p>
+      </div>
+      <div className="section-tabs">
+        <SubnavButton active={usersSubPage === "list"} onClick={() => setUsersSubPage("list")}>
+          Przegląd
+        </SubnavButton>
+        <SubnavButton active={usersSubPage === "add"} onClick={() => setUsersSubPage("add")}>
+          Dodawanie
+        </SubnavButton>
+      </div>
+      <div className="section-body">
+        {usersSubPage === "list" ? renderUsersListPage() : null}
+        {usersSubPage === "add" ? renderUserAddPage() : null}
+      </div>
+    </section>
+  );
+
   const renderPage = () => {
-    switch (activePage) {
+    switch (activeSection) {
       case "roots":
         return renderRootsPage();
-      case "network-vlan-list":
-        return renderVlanListPage();
-      case "network-vlan-add":
-        return renderVlanAddPage();
-      case "network-wifi-list":
-        return renderWifiListPage();
-      case "network-wifi-add":
-        return renderWifiAddPage();
-      case "devices-list":
-        return renderDevicesListPage();
-      case "devices-add":
-        return renderDeviceAddPage();
-      case "users-list":
-        return renderUsersListPage();
-      case "users-add":
-        return renderUserAddPage();
+      case "network":
+        return renderNetworkingSection();
+      case "devices":
+        return renderDevicesSection();
+      case "users":
+        return renderUsersSection();
       case "topology":
         return renderTopologyPage();
       default:
@@ -2781,47 +2848,26 @@ function ExplorerScreen({ me, accessToken, onLogout, notify }) {
           <aside className="menu-panel">
             <h3>Menu</h3>
 
-            <p className="menu-group-title">Rooty</p>
-            <MenuButton active={activePage === "roots"} onClick={() => setActivePage("roots")}>Rooty i przestrzenie</MenuButton>
-
-            <p className="menu-group-title">Sieciowe</p>
-            <MenuButton
-              active={activePage === "network-vlan-list"}
-              onClick={() => setActivePage("network-vlan-list")}
-            >
-              VLAN - przegląd
+            <p className="menu-group-title">Obszary</p>
+            <MenuButton active={activeSection === "roots"} onClick={() => setActiveSection("roots")}>
+              Rooty i przestrzenie
             </MenuButton>
-            <MenuButton
-              active={activePage === "network-vlan-add"}
-              onClick={() => setActivePage("network-vlan-add")}
-            >
-              VLAN - dodawanie
+            <MenuButton active={activeSection === "network"} onClick={() => setActiveSection("network")}>
+              Sieciowe
             </MenuButton>
-            <MenuButton
-              active={activePage === "network-wifi-list"}
-              onClick={() => setActivePage("network-wifi-list")}
-            >
-              Wi-Fi - przegląd
+            <MenuButton active={activeSection === "devices"} onClick={() => setActiveSection("devices")}>
+              Urządzenia
             </MenuButton>
-            <MenuButton
-              active={activePage === "network-wifi-add"}
-              onClick={() => setActivePage("network-wifi-add")}
-            >
-              Wi-Fi - dodawanie
+            <MenuButton active={activeSection === "topology"} onClick={() => setActiveSection("topology")}>
+              Topologia PNG
             </MenuButton>
-
-            <p className="menu-group-title">Urządzenia</p>
-            <MenuButton active={activePage === "devices-list"} onClick={() => setActivePage("devices-list")}>Urządzenia - przegląd</MenuButton>
-            <MenuButton active={activePage === "devices-add"} onClick={() => setActivePage("devices-add")}>Urządzenia - dodawanie</MenuButton>
-
-            <p className="menu-group-title">Topologia</p>
-            <MenuButton active={activePage === "topology"} onClick={() => setActivePage("topology")}>Topologia PNG</MenuButton>
 
             {isAdmin ? (
               <>
                 <p className="menu-group-title">Użytkownicy</p>
-                <MenuButton active={activePage === "users-list"} onClick={() => setActivePage("users-list")}>Użytkownicy - przegląd</MenuButton>
-                <MenuButton active={activePage === "users-add"} onClick={() => setActivePage("users-add")}>Użytkownicy - dodawanie</MenuButton>
+                <MenuButton active={activeSection === "users"} onClick={() => setActiveSection("users")}>
+                  Użytkownicy
+                </MenuButton>
               </>
             ) : null}
           </aside>
@@ -2830,7 +2876,6 @@ function ExplorerScreen({ me, accessToken, onLogout, notify }) {
         </div>
 
         {loading ? <p>Ładowanie danych...</p> : null}
-        {error ? <p className="error">{error}</p> : null}
       </section>
   );
 }

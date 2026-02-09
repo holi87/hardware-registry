@@ -257,6 +257,48 @@ button:disabled {
   margin-top: 0;
 }
 
+.section-page {
+  gap: 0.9rem;
+}
+
+.section-header {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.section-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  padding: 0.35rem;
+  background: var(--surface-soft);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+
+.subnav-btn {
+  background: #ffffff;
+  border: 1px solid var(--line);
+  color: var(--text);
+}
+
+.subnav-btn.active {
+  background: var(--brand-dark);
+  border-color: var(--brand-dark);
+  color: #ffffff;
+}
+
+.section-body {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.section-body > .subpanel {
+  border: 0;
+  margin-top: 0;
+  padding-top: 0;
+}
+
 .table-wrap {
   overflow: auto;
   border: 1px solid var(--line);
@@ -324,6 +366,21 @@ button:disabled {
 .table-actions button {
   min-height: 34px;
   padding: 0.48rem 0.7rem;
+}
+
+.users-table input,
+.users-table select {
+  min-width: 150px;
+}
+
+.users-table th:nth-child(4),
+.users-table td:nth-child(4) {
+  min-width: 220px;
+}
+
+.users-table th:nth-child(5),
+.users-table td:nth-child(5) {
+  min-width: 260px;
 }
 
 .edit-row td {
