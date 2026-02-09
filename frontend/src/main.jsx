@@ -2553,8 +2553,8 @@ function ExplorerScreen({ me, accessToken, onLogout, notify }) {
                           <option value="ADMIN">ADMIN</option>
                         </select>
                       </td>
-                      <td>
-                        <label className="checkbox-row compact">
+                      <td className="users-active-cell">
+                        <label className="checkbox-inline">
                           <input
                             type="checkbox"
                             checked={Boolean(draft.is_active)}
@@ -2565,13 +2565,13 @@ function ExplorerScreen({ me, accessToken, onLogout, notify }) {
                               }))
                             }
                           />
-                          tak
+                          {draft.is_active ? "tak" : "nie"}
                         </label>
                       </td>
                       <td>
-                        <div className="checklist">
+                        <div className="checklist users-roots-list">
                           {roots.map((root) => (
-                            <label key={`${user.id}-${root.id}`} className="checkbox-row compact">
+                            <label key={`${user.id}-${root.id}`} className="checkbox-inline users-root-toggle">
                               <input
                                 type="checkbox"
                                 checked={(draft.root_ids || []).includes(root.id)}
@@ -2588,7 +2588,7 @@ function ExplorerScreen({ me, accessToken, onLogout, notify }) {
                                   }));
                                 }}
                               />
-                              {root.name}
+                              <span>{root.name}</span>
                             </label>
                           ))}
                         </div>
@@ -2747,39 +2747,42 @@ function ExplorerScreen({ me, accessToken, onLogout, notify }) {
 
   return (
     <section className="panel">
-        <div className="panel-header">
-          <div>
-            <h2>Hardware Registry</h2>
-            <p className="muted">
-              {me.email} ({me.role})
-            </p>
-          </div>
-          <button type="button" className="button-secondary" onClick={onLogout}>
-            Wyloguj
-          </button>
+      <div className="panel-header">
+        <div>
+          <h2>Hardware Registry</h2>
+          <p className="muted">
+            {me.email} ({me.role})
+          </p>
         </div>
+        <button type="button" className="button-secondary" onClick={onLogout}>
+          Wyloguj
+        </button>
+      </div>
 
-        <div className="field">
-          <label htmlFor="root-selector">Aktywny root</label>
-          <select id="root-selector" value={selectedRootId} onChange={onRootChange}>
-            {roots.map((root) => (
-              <option key={root.id} value={root.id}>
-                {root.name}
-              </option>
-            ))}
-          </select>
-        </div>
+      <div className="field">
+        <label htmlFor="root-selector">Aktywny root</label>
+        <select id="root-selector" value={selectedRootId} onChange={onRootChange}>
+          {roots.map((root) => (
+            <option key={root.id} value={root.id}>
+              {root.name}
+            </option>
+          ))}
+        </select>
+      </div>
 
-        <div className="console-layout">
-          <aside className="menu-panel">
-            <h3>Menu</h3>
-
-            <p className="menu-group-title">Rooty</p>
+      <nav className="top-menu" aria-label="Nawigacja aplikacji">
+        <div className="top-menu-group">
+          <p className="top-menu-title">Rooty</p>
+          <div className="top-menu-buttons">
             <MenuButton active={activePage === EXPLORER_PAGES.ROOTS} onClick={() => goToPage(EXPLORER_PAGES.ROOTS)}>
               Rooty i przestrzenie
             </MenuButton>
+          </div>
+        </div>
 
-            <p className="menu-group-title">Sieciowe</p>
+        <div className="top-menu-group">
+          <p className="top-menu-title">Sieciowe</p>
+          <div className="top-menu-buttons">
             <MenuButton
               active={activePage === EXPLORER_PAGES.NETWORK_VLANS}
               onClick={() => goToPage(EXPLORER_PAGES.NETWORK_VLANS)}
@@ -2804,8 +2807,12 @@ function ExplorerScreen({ me, accessToken, onLogout, notify }) {
             >
               Wi-Fi - dodawanie
             </MenuButton>
+          </div>
+        </div>
 
-            <p className="menu-group-title">Urządzenia</p>
+        <div className="top-menu-group">
+          <p className="top-menu-title">Urządzenia</p>
+          <div className="top-menu-buttons">
             <MenuButton active={activePage === EXPLORER_PAGES.DEVICES} onClick={() => goToPage(EXPLORER_PAGES.DEVICES)}>
               Urządzenia - przegląd
             </MenuButton>
@@ -2821,28 +2828,31 @@ function ExplorerScreen({ me, accessToken, onLogout, notify }) {
             >
               Topologia PNG
             </MenuButton>
-
-            {isAdmin ? (
-              <>
-                <p className="menu-group-title">Użytkownicy</p>
-                <MenuButton active={activePage === EXPLORER_PAGES.USERS} onClick={() => goToPage(EXPLORER_PAGES.USERS)}>
-                  Użytkownicy - przegląd
-                </MenuButton>
-                <MenuButton
-                  active={activePage === EXPLORER_PAGES.USERS_NEW}
-                  onClick={() => goToPage(EXPLORER_PAGES.USERS_NEW)}
-                >
-                  Użytkownicy - dodawanie
-                </MenuButton>
-              </>
-            ) : null}
-          </aside>
-
-          <div className="content-panel">{renderPage()}</div>
+          </div>
         </div>
 
-        {loading ? <p>Ładowanie danych...</p> : null}
-      </section>
+        {isAdmin ? (
+          <div className="top-menu-group">
+            <p className="top-menu-title">Użytkownicy</p>
+            <div className="top-menu-buttons">
+              <MenuButton active={activePage === EXPLORER_PAGES.USERS} onClick={() => goToPage(EXPLORER_PAGES.USERS)}>
+                Użytkownicy - przegląd
+              </MenuButton>
+              <MenuButton
+                active={activePage === EXPLORER_PAGES.USERS_NEW}
+                onClick={() => goToPage(EXPLORER_PAGES.USERS_NEW)}
+              >
+                Użytkownicy - dodawanie
+              </MenuButton>
+            </div>
+          </div>
+        ) : null}
+      </nav>
+
+      <div className="content-panel">{renderPage()}</div>
+
+      {loading ? <p>Ładowanie danych...</p> : null}
+    </section>
   );
 }
 
